@@ -1,5 +1,9 @@
 # YahooFinanceEx
 
+[![CI](https://github.com/fleveque/yahoo_finance_ex/actions/workflows/ci.yml/badge.svg)](https://github.com/fleveque/yahoo_finance_ex/actions/workflows/ci.yml)
+[![Hex.pm](https://img.shields.io/hexpm/v/yahoo_finance_ex.svg)](https://hex.pm/packages/yahoo_finance_ex)
+[![HexDocs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/yahoo_finance_ex)
+
 Elixir client for the Yahoo! Finance API. Handles Yahoo's cookie + CSRF crumb authentication transparently.
 
 > ⚠️ **Yahoo's API is unofficial and undocumented.** Endpoints, auth requirements, and response shapes can change without notice. This library tracks the patterns that worked at the time of writing; expect occasional breakage.

@@ -35,8 +35,9 @@ defmodule YahooFinanceEx.MixProject do
   end
 
   defp description do
-    "Elixir client for the Yahoo! Finance API: stock quotes, FX rates, " <>
-      "dividend history. Handles Yahoo's cookie + CSRF crumb auth flow."
+    "Elixir client for the Yahoo! Finance API. Handles the cookie + " <>
+      "CSRF crumb auth flow transparently. v0.1 ships single-symbol " <>
+      "quote fetch; batched quotes, FX, and dividend history planned."
   end
 
   defp package do

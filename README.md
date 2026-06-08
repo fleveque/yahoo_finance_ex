@@ -10,10 +10,14 @@ Elixir client for the Yahoo! Finance API. Handles Yahoo's cookie + CSRF crumb au
 
 ## Status
 
-v0.1 ships the smallest useful surface: **single-symbol quote fetch**. Planned follow-ups (none yet implemented):
+v0.2 surface:
 
-- batched quote fetch (`get_quotes/1`)
-- FX rates (`get_fx_rate/2`)
+- `get_quote/1` — single-symbol quote.
+- `get_quotes/1` — batched quote fetch (chunks of 50, returns a per-symbol result map).
+- `get_fx_rate/2` — FX rate between two ISO 4217 codes via the `<FROM><TO>=X` ticker convention.
+
+Planned follow-ups (not yet implemented):
+
 - dividend history (`get_dividend_history/2`)
 - symbol search (`search/2`)
 - in-memory caching with TTL
@@ -23,7 +27,7 @@ v0.1 ships the smallest useful surface: **single-symbol quote fetch**. Planned f
 ```elixir
 def deps do
   [
-    {:yahoo_finance_ex, "~> 0.1"}
+    {:yahoo_finance_ex, "~> 0.2"}
   ]
 end
 ```
@@ -41,21 +45,28 @@ end
 ## Usage
 
 ```elixir
+# Single symbol
 {:ok, quote} = YahooFinanceEx.get_quote("AAPL")
-
-quote.symbol           #=> "AAPL"
 quote.price            #=> 187.42
-quote.currency         #=> "USD"
-quote.dividend_yield   #=> 0.51
-quote.ma200            #=> 175.00
+
+# Batched (chunks into groups of 50 internally)
+{:ok, by_symbol} = YahooFinanceEx.get_quotes(["AAPL", "MSFT", "GOOG"])
+by_symbol["AAPL"]      #=> {:ok, %YahooFinanceEx.Quote{...}}
+by_symbol["FAKE"]      #=> {:error, :not_found}   # unknown symbols come back individually
+
+# FX rate
+{:ok, rate} = YahooFinanceEx.get_fx_rate("EUR", "USD")    #=> {:ok, 1.08}
+{:ok, 1.0} = YahooFinanceEx.get_fx_rate("USD", "USD")     # identity short-circuits
 ```
 
-Errors return `{:error, reason}` with one of:
+Top-level errors (for `get_quote` and `get_fx_rate`, plus aborted `get_quotes` calls) return `{:error, reason}` with one of:
 
-- `:not_found` — Yahoo returned an empty result for the symbol
+- `:not_found` — Yahoo returned no quote for the symbol/pair
 - `{:auth_failed, _}` — auth refresh failed after retries
 - `{:http_status, status}` — non-200 HTTP status from Yahoo
 - `{:transport, reason}` — network / transport error from Req
+
+For `get_quotes/1`, partial failures (some symbols missing) surface inside the result map as `{:error, :not_found}` for those keys; the top-level call still returns `{:ok, map}`.
 
 ## Architecture
 

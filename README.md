@@ -32,7 +32,7 @@ def deps do
 end
 ```
 
-Until published to Hex, use a git or path dependency:
+To track unreleased changes, you can point at the repo directly instead:
 
 ```elixir
 def deps do

@@ -2,20 +2,24 @@ defmodule YahooFinanceEx do
   @moduledoc """
   Elixir client for Yahoo! Finance.
 
-  v0.2 surface:
+  v0.3 surface:
 
     * `get_quote/1` — single-symbol quote.
     * `get_quotes/1` — batched quote fetch (up to 50 symbols per HTTP call;
       this function transparently batches larger lists).
     * `get_fx_rate/2` — current FX rate between two ISO 4217 currency codes
       via Yahoo's `<FROM><TO>=X` quote symbol.
+    * `get_asset_profile/1` — sector + industry via the `quoteSummary`
+      endpoint's `assetProfile` module (v0.3).
+    * `get_dividend_history/2` — per-payment dividend history via the
+      chart endpoint's `events=div` stream (v0.3); the raw material for
+      payment-schedule inference.
 
   All paths go through `YahooFinanceEx.Session` to handle the cookie + CSRF
   crumb auth dance, and through `Req` for HTTP — so tests can stub the
   whole thing with `Req.Test`.
 
-  Dividend history, symbol search, and an in-memory cache layer are
-  planned follow-ups.
+  Symbol search and an in-memory cache layer are planned follow-ups.
 
   ## Quickstart
 
@@ -39,6 +43,8 @@ defmodule YahooFinanceEx do
   alias YahooFinanceEx.{Quote, Session}
 
   @quote_path "/v7/finance/quote"
+  @quote_summary_path "/v10/finance/quoteSummary"
+  @chart_path "/v8/finance/chart"
   @max_auth_retries 2
   @batch_size 50
 
@@ -68,21 +74,12 @@ defmodule YahooFinanceEx do
     fetch_quote_with_retry(symbol, 0)
   end
 
-  defp fetch_quote_with_retry(symbol, attempt) do
-    with {:ok, creds} <- Session.credentials(),
-         {:ok, body} <- do_quote_request(symbol, creds) do
-      parse_single_quote(body)
-    else
-      {:error, :unauthorized} when attempt < @max_auth_retries ->
-        Session.invalidate()
-        fetch_quote_with_retry(symbol, attempt + 1)
-
-      {:error, :unauthorized} ->
-        {:error, {:auth_failed, :max_retries_exceeded}}
-
-      {:error, _} = err ->
-        err
-    end
+  defp fetch_quote_with_retry(symbol, _attempt) do
+    with_auth_retry(fn creds ->
+      with {:ok, body} <- do_quote_request(symbol, creds) do
+        parse_single_quote(body)
+      end
+    end)
   end
 
   defp parse_single_quote(body) when is_map(body) do
@@ -124,21 +121,12 @@ defmodule YahooFinanceEx do
     end)
   end
 
-  defp fetch_batch_with_retry(symbols, attempt) do
-    with {:ok, creds} <- Session.credentials(),
-         {:ok, body} <- do_quote_request(Enum.join(symbols, ","), creds) do
-      {:ok, parse_batch_quote(body, symbols)}
-    else
-      {:error, :unauthorized} when attempt < @max_auth_retries ->
-        Session.invalidate()
-        fetch_batch_with_retry(symbols, attempt + 1)
-
-      {:error, :unauthorized} ->
-        {:error, {:auth_failed, :max_retries_exceeded}}
-
-      {:error, _} = err ->
-        err
-    end
+  defp fetch_batch_with_retry(symbols, _attempt) do
+    with_auth_retry(fn creds ->
+      with {:ok, body} <- do_quote_request(Enum.join(symbols, ","), creds) do
+        {:ok, parse_batch_quote(body, symbols)}
+      end
+    end)
   end
 
   defp parse_batch_quote(body, requested_symbols) when is_map(body) do
@@ -176,13 +164,128 @@ defmodule YahooFinanceEx do
     end
   end
 
+  ## get_asset_profile/1
+
+  @doc """
+  Fetches the sector and industry for a ticker via Yahoo's
+  `quoteSummary` endpoint (`assetProfile` module).
+
+  Returns `{:ok, %{sector: sector, industry: industry}}` (industry may
+  be nil), or `{:error, :not_found}` for funds, ETFs, and any symbol
+  where Yahoo exposes no asset profile (a blank sector counts as none —
+  matching the Ruby client's behavior).
+  """
+  @spec get_asset_profile(String.t()) ::
+          {:ok, %{sector: String.t(), industry: String.t() | nil}} | {:error, error()}
+  def get_asset_profile(symbol) when is_binary(symbol) do
+    with_auth_retry(fn creds ->
+      url = creds.base_url <> @quote_summary_path <> "/" <> URI.encode(symbol)
+
+      with {:ok, body} <-
+             authed_get(url, [modules: "assetProfile", crumb: creds.crumb], creds) do
+        parse_asset_profile(body)
+      end
+    end)
+  end
+
+  defp parse_asset_profile(body) when is_map(body) do
+    case get_in(body, ["quoteSummary", "result", Access.at(0), "assetProfile"]) do
+      %{"sector" => sector} = profile when is_binary(sector) and sector != "" ->
+        {:ok, %{sector: sector, industry: profile["industry"]}}
+
+      _missing_or_blank ->
+        {:error, :not_found}
+    end
+  end
+
+  ## get_dividend_history/2
+
+  @doc """
+  Fetches the per-payment dividend history for a ticker via the chart
+  endpoint's `events=div` stream.
+
+  Returns `{:ok, entries}` — each entry `%{date: Date.t(), amount:
+  float}`, sorted ascending by date — or `{:ok, []}` when the symbol
+  pays no dividends (or Yahoo reports none for the range). Consumers
+  infer payment schedules (frequency, months) from these entries.
+
+  Options:
+
+    * `:range` — Yahoo range string, default `"2y"` (enough to see a
+      quarterly pattern twice).
+  """
+  @spec get_dividend_history(String.t(), keyword()) ::
+          {:ok, [%{date: Date.t(), amount: float()}]} | {:error, error()}
+  def get_dividend_history(symbol, opts \\ []) when is_binary(symbol) do
+    range = Keyword.get(opts, :range, "2y")
+
+    with_auth_retry(fn creds ->
+      url = creds.base_url <> @chart_path <> "/" <> URI.encode(symbol)
+
+      with {:ok, body} <-
+             authed_get(
+               url,
+               [range: range, interval: "1mo", events: "div", crumb: creds.crumb],
+               creds
+             ) do
+        {:ok, parse_dividend_history(body)}
+      end
+    end)
+  end
+
+  defp parse_dividend_history(body) when is_map(body) do
+    case get_in(body, ["chart", "result", Access.at(0), "events", "dividends"]) do
+      %{} = dividends ->
+        dividends
+        |> Map.values()
+        |> Enum.flat_map(&parse_dividend_entry/1)
+        |> Enum.sort_by(& &1.date, Date)
+
+      _none ->
+        []
+    end
+  end
+
+  defp parse_dividend_entry(%{"date" => unix, "amount" => amount})
+       when is_integer(unix) and is_number(amount) and amount > 0 do
+    case DateTime.from_unix(unix) do
+      {:ok, datetime} -> [%{date: DateTime.to_date(datetime), amount: amount * 1.0}]
+      {:error, _} -> []
+    end
+  end
+
+  defp parse_dividend_entry(_malformed), do: []
+
+  ## Auth-retry wrapper — Yahoo invalidates sessions occasionally, so
+  ## every endpoint retries once on 401 with fresh credentials.
+
+  defp with_auth_retry(fun, attempt \\ 0) do
+    with {:ok, creds} <- Session.credentials() do
+      fun.(creds)
+    end
+    |> case do
+      {:error, :unauthorized} when attempt < @max_auth_retries ->
+        Session.invalidate()
+        with_auth_retry(fun, attempt + 1)
+
+      {:error, :unauthorized} ->
+        {:error, {:auth_failed, :max_retries_exceeded}}
+
+      other ->
+        other
+    end
+  end
+
   ## Shared HTTP wrapper
 
   defp do_quote_request(symbols_param, creds) do
     url = creds.base_url <> @quote_path
+    authed_get(url, [symbols: symbols_param, crumb: creds.crumb], creds)
+  end
 
+  defp authed_get(url, params, creds) do
     case YahooFinanceEx.HTTP.get(url,
-           params: [symbols: symbols_param, crumb: creds.crumb],
+           params: params,
            headers: [
              {"user-agent", Session.user_agent()},
              {"cookie", creds.cookie}

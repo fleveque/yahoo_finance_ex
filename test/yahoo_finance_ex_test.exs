@@ -177,6 +177,111 @@ defmodule YahooFinanceExTest do
 
   ## Helpers
 
+  describe "get_asset_profile/1" do
+    test "returns sector + industry from the assetProfile module" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/AAPL"} ->
+            Req.Test.json(conn, %{
+              "quoteSummary" => %{
+                "result" => [
+                  %{
+                    "assetProfile" => %{
+                      "sector" => "Technology",
+                      "industry" => "Consumer Electronics"
+                    }
+                  }
+                ]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, %{sector: "Technology", industry: "Consumer Electronics"}} =
+               YahooFinanceEx.get_asset_profile("AAPL")
+    end
+
+    test "funds/ETFs (no profile or blank sector) are :not_found" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/VWCE.DE"} ->
+            Req.Test.json(conn, %{
+              "quoteSummary" => %{"result" => [%{"assetProfile" => %{"sector" => ""}}]}
+            })
+        end
+      end)
+
+      assert {:error, :not_found} = YahooFinanceEx.get_asset_profile("VWCE.DE")
+    end
+  end
+
+  describe "get_dividend_history/2" do
+    test "returns date-sorted entries from the chart events stream" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v8/finance/chart/KO"} ->
+            assert conn.query_params["events"] == "div"
+
+            Req.Test.json(conn, %{
+              "chart" => %{
+                "result" => [
+                  %{
+                    "events" => %{
+                      "dividends" => %{
+                        # Deliberately unsorted; one malformed entry dropped.
+                        "1717000000" => %{"date" => 1_717_000_000, "amount" => 0.485},
+                        "1709000000" => %{"date" => 1_709_000_000, "amount" => 0.485},
+                        "bad" => %{"date" => nil, "amount" => 0.485}
+                      }
+                    }
+                  }
+                ]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, [first, second]} = YahooFinanceEx.get_dividend_history("KO")
+      assert first.amount == 0.485
+      assert Date.compare(first.date, second.date) == :lt
+    end
+
+    test "no dividend events is {:ok, []}" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v8/finance/chart/GROW"} ->
+            Req.Test.json(conn, %{"chart" => %{"result" => [%{"events" => %{}}]}})
+        end
+      end)
+
+      assert {:ok, []} = YahooFinanceEx.get_dividend_history("GROW")
+    end
+  end
+
   defp stub_yahoo(fun) do
     Req.Test.stub(YahooFinanceEx.HTTPStub, fun)
     # The Session GenServer (started by the package's Application) lives

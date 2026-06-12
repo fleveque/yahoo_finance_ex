@@ -10,17 +10,17 @@ Elixir client for the Yahoo! Finance API. Handles Yahoo's cookie + CSRF crumb au
 
 ## Status
 
-v0.3 surface:
+v0.4 surface:
 
 - `get_quote/1` — single-symbol quote.
 - `get_quotes/1` — batched quote fetch (chunks of 50, returns a per-symbol result map).
 - `get_fx_rate/2` — FX rate between two ISO 4217 codes via the `<FROM><TO>=X` ticker convention.
 - `get_asset_profile/1` — sector + industry via `quoteSummary`'s `assetProfile` module (v0.3).
 - `get_dividend_history/2` — per-payment dividend history via the chart endpoint's `events=div` stream (v0.3).
+- `search/2` — free-text ticker/company autocomplete via the `search` endpoint (v0.4).
 
 Planned follow-ups (not yet implemented):
 
-- symbol search (`search/2`)
 - in-memory caching with TTL
 
 ## Installation

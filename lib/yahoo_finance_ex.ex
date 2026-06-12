@@ -2,7 +2,7 @@ defmodule YahooFinanceEx do
   @moduledoc """
   Elixir client for Yahoo! Finance.
 
-  v0.3 surface:
+  v0.4 surface:
 
     * `get_quote/1` — single-symbol quote.
     * `get_quotes/1` — batched quote fetch (up to 50 symbols per HTTP call;
@@ -14,12 +14,14 @@ defmodule YahooFinanceEx do
     * `get_dividend_history/2` — per-payment dividend history via the
       chart endpoint's `events=div` stream (v0.3); the raw material for
       payment-schedule inference.
+    * `search/2` — free-text ticker/company autocomplete via the
+      `search` endpoint (v0.4).
 
   All paths go through `YahooFinanceEx.Session` to handle the cookie + CSRF
   crumb auth dance, and through `Req` for HTTP — so tests can stub the
   whole thing with `Req.Test`.
 
-  Symbol search and an in-memory cache layer are planned follow-ups.
+  An in-memory cache layer is a planned follow-up.
 
   ## Quickstart
 
@@ -45,6 +47,7 @@ defmodule YahooFinanceEx do
   @quote_path "/v7/finance/quote"
   @quote_summary_path "/v10/finance/quoteSummary"
   @chart_path "/v8/finance/chart"
+  @search_path "/v1/finance/search"
   @max_auth_retries 2
   @batch_size 50
 
@@ -57,6 +60,14 @@ defmodule YahooFinanceEx do
 
   @typedoc "Per-symbol result inside a batched `get_quotes/1` response."
   @type per_symbol_result :: {:ok, Quote.t()} | {:error, :not_found}
+
+  @typedoc "One match returned by `search/2`."
+  @type search_result :: %{
+          symbol: String.t(),
+          name: String.t(),
+          exchange: String.t() | nil,
+          type: String.t() | nil
+        }
 
   ## get_quote/1
 
@@ -255,6 +266,69 @@ defmodule YahooFinanceEx do
   end
 
   defp parse_dividend_entry(_malformed), do: []
+
+  ## search/2
+
+  @doc """
+  Searches Yahoo Finance for tickers matching a free-text query (a
+  ticker fragment or a company name) via the `/v1/finance/search`
+  autocomplete endpoint.
+
+  Returns `{:ok, results}` — each result `%{symbol:, name:, exchange:,
+  type:}`, in Yahoo's relevance order — or `{:ok, []}` for a blank
+  query or no matches. `type` is Yahoo's `quoteType` (`"EQUITY"`,
+  `"ETF"`, `"MUTUALFUND"`, `"INDEX"`, …) so callers can filter to the
+  instruments they care about; `name` falls back `shortname` →
+  `longname` → symbol.
+
+  Options:
+
+    * `:count` — max results to request, default 10.
+  """
+  @spec search(String.t(), keyword()) :: {:ok, [search_result()]} | {:error, error()}
+  def search(query, opts \\ []) when is_binary(query) do
+    count = Keyword.get(opts, :count, 10)
+
+    case String.trim(query) do
+      "" ->
+        {:ok, []}
+
+      normalized ->
+        with_auth_retry(fn creds ->
+          url = creds.base_url <> @search_path
+
+          with {:ok, body} <-
+                 authed_get(
+                   url,
+                   [q: normalized, quotesCount: count, newsCount: 0, crumb: creds.crumb],
+                   creds
+                 ) do
+            {:ok, parse_search(body)}
+          end
+        end)
+    end
+  end
+
+  defp parse_search(body) when is_map(body) do
+    body
+    |> Map.get("quotes")
+    |> List.wrap()
+    |> Enum.flat_map(&parse_search_quote/1)
+  end
+
+  defp parse_search_quote(%{"symbol" => symbol} = raw)
+       when is_binary(symbol) and symbol != "" do
+    [
+      %{
+        symbol: symbol,
+        name: raw["shortname"] || raw["longname"] || symbol,
+        exchange: raw["exchDisp"] || raw["exchange"],
+        type: raw["quoteType"]
+      }
+    ]
+  end
+
+  defp parse_search_quote(_no_symbol), do: []
 
   ## Auth-retry wrapper — Yahoo invalidates sessions occasionally, so
   ## every endpoint retries once on 401 with fresh credentials.

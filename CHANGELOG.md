@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-12
+
+### Added
+
+- `YahooFinanceEx.search/2` — free-text ticker/company autocomplete via
+  Yahoo's `/v1/finance/search` endpoint. Returns `{:ok, results}` with
+  `%{symbol:, name:, exchange:, type:}` entries in Yahoo's relevance
+  order; `type` is Yahoo's `quoteType` so callers can filter instrument
+  kinds. Blank queries short-circuit to `{:ok, []}`.
+
+## [0.3.0] - 2026-06-11
+
+_(Entry backfilled — 0.3.0 shipped without a changelog entry.)_
+
+### Added
+
+- `YahooFinanceEx.get_asset_profile/1` — sector + industry via the
+  `quoteSummary` endpoint's `assetProfile` module.
+- `YahooFinanceEx.get_dividend_history/2` — per-payment dividend
+  history via the chart endpoint's `events=div` stream; the raw
+  material for payment-schedule inference. Accepts `:range` (default
+  `"2y"`).
+
 ## [0.2.0] - 2026-06-08
 
 ### Added

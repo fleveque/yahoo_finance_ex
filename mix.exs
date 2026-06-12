@@ -1,7 +1,7 @@
 defmodule YahooFinanceEx.MixProject do
   use Mix.Project
 
-  @version "0.3.0"
+  @version "0.4.0"
   @source_url "https://github.com/fleveque/yahoo_finance_ex"
 
   def project do
@@ -36,8 +36,8 @@ defmodule YahooFinanceEx.MixProject do
 
   defp description do
     "Elixir client for the Yahoo! Finance API. Handles the cookie + " <>
-      "CSRF crumb auth flow transparently. Single + batched quote fetch " <>
-      "and FX rates; dividend history and search planned."
+      "CSRF crumb auth flow transparently. Single + batched quotes, FX " <>
+      "rates, asset profiles, dividend history, and symbol search."
   end
 
   defp package do

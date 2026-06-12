@@ -282,6 +282,69 @@ defmodule YahooFinanceExTest do
     end
   end
 
+  describe "search/2" do
+    test "returns parsed matches in Yahoo's order" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v1/finance/search"} ->
+            assert conn.params["q"] == "coca cola"
+
+            Req.Test.json(conn, %{
+              "quotes" => [
+                %{
+                  "symbol" => "KO",
+                  "shortname" => "Coca-Cola Company (The)",
+                  "exchDisp" => "NYSE",
+                  "quoteType" => "EQUITY"
+                },
+                %{
+                  "symbol" => "CCEP",
+                  "longname" => "Coca-Cola Europacific Partners PLC",
+                  "exchange" => "NMS",
+                  "quoteType" => "EQUITY"
+                },
+                # No symbol → dropped.
+                %{"shortname" => "Mystery"}
+              ]
+            })
+        end
+      end)
+
+      assert {:ok, [ko, ccep]} = YahooFinanceEx.search("coca cola")
+      assert %{symbol: "KO", name: "Coca-Cola Company (The)", exchange: "NYSE"} = ko
+      assert %{symbol: "CCEP", name: "Coca-Cola Europacific Partners PLC", exchange: "NMS"} = ccep
+      assert ko.type == "EQUITY"
+    end
+
+    test "blank query short-circuits to {:ok, []} without HTTP" do
+      # No stub installed — any HTTP call would crash the test.
+      assert {:ok, []} = YahooFinanceEx.search("   ")
+    end
+
+    test "no matches is {:ok, []}" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v1/finance/search"} ->
+            Req.Test.json(conn, %{"quotes" => []})
+        end
+      end)
+
+      assert {:ok, []} = YahooFinanceEx.search("zzzzzz")
+    end
+  end
+
   defp stub_yahoo(fun) do
     Req.Test.stub(YahooFinanceEx.HTTPStub, fun)
     # The Session GenServer (started by the package's Application) lives

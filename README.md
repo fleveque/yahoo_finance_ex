@@ -10,15 +10,16 @@ Elixir client for the Yahoo! Finance API. Handles Yahoo's cookie + CSRF crumb au
 
 ## Status
 
-v0.5 surface:
+v0.6 surface:
 
 - `get_quote/1` — single-symbol quote.
 - `get_quotes/1` — batched quote fetch (chunks of 50, returns a per-symbol result map).
 - `get_fx_rate/2` — FX rate between two ISO 4217 codes via the `<FROM><TO>=X` ticker convention.
-- `get_asset_profile/1` — sector + industry via `quoteSummary`'s `assetProfile` module (v0.3).
+- `get_asset_profile/1` — company profile (sector, industry, website, description) via `quoteSummary`'s `assetProfile` module (v0.3; website + description added in v0.6).
 - `get_dividend_history/2` — per-payment dividend history via the chart endpoint's `events=div` stream (v0.3).
 - `search/2` — free-text ticker/company autocomplete via the `search` endpoint (v0.4).
 - `get_financial_data/1` — leverage / balance-sheet figures (total debt, debt-to-equity, current & quick ratio, total cash, EBITDA) via `quoteSummary`'s `financialData` module (v0.5).
+- `get_news/2` — recent news headlines via the `search` endpoint's `news` stream (v0.6).
 
 Planned follow-ups (not yet implemented):
 
@@ -60,9 +61,12 @@ by_symbol["FAKE"]      #=> {:error, :not_found}   # unknown symbols come back in
 {:ok, rate} = YahooFinanceEx.get_fx_rate("EUR", "USD")    #=> {:ok, 1.08}
 {:ok, 1.0} = YahooFinanceEx.get_fx_rate("USD", "USD")     # identity short-circuits
 
-# Sector / industry (funds and ETFs have none -> {:error, :not_found})
+# Company profile (funds and ETFs have none -> {:error, :not_found};
+# website/description are nil when Yahoo omits them)
 {:ok, profile} = YahooFinanceEx.get_asset_profile("AAPL")
 profile.sector         #=> "Technology"
+profile.website        #=> "https://www.apple.com"
+profile.description    #=> "Apple Inc. designs and sells smartphones..."
 
 # Dividend history (date-sorted; default range "2y")
 {:ok, history} = YahooFinanceEx.get_dividend_history("KO")
@@ -72,6 +76,10 @@ hd(history)            #=> %{date: ~D[2024-03-15], amount: 0.485}
 {:ok, financials} = YahooFinanceEx.get_financial_data("AAPL")
 financials.debt_to_equity   #=> 151.4   # percentage, Yahoo's convention
 financials.total_debt       #=> 1.087e11
+
+# Recent news headlines (most-recent first; {:ok, []} when none)
+{:ok, news} = YahooFinanceEx.get_news("AAPL", count: 5)
+hd(news)                    #=> %{title: "...", url: "...", publisher: "...", published_at: ~U[...]}
 ```
 
 Top-level errors (for the single-resource functions, plus aborted `get_quotes` calls) return `{:error, reason}` with one of:

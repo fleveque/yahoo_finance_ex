@@ -194,7 +194,9 @@ defmodule YahooFinanceExTest do
                   %{
                     "assetProfile" => %{
                       "sector" => "Technology",
-                      "industry" => "Consumer Electronics"
+                      "industry" => "Consumer Electronics",
+                      "website" => "https://www.apple.com",
+                      "longBusinessSummary" => "Apple Inc. designs and sells smartphones."
                     }
                   }
                 ]
@@ -203,8 +205,35 @@ defmodule YahooFinanceExTest do
         end
       end)
 
-      assert {:ok, %{sector: "Technology", industry: "Consumer Electronics"}} =
-               YahooFinanceEx.get_asset_profile("AAPL")
+      assert {:ok,
+              %{
+                sector: "Technology",
+                industry: "Consumer Electronics",
+                website: "https://www.apple.com",
+                description: "Apple Inc. designs and sells smartphones."
+              }} = YahooFinanceEx.get_asset_profile("AAPL")
+    end
+
+    test "website + description are nil when the profile omits them" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/KO"} ->
+            Req.Test.json(conn, %{
+              "quoteSummary" => %{
+                "result" => [%{"assetProfile" => %{"sector" => "Consumer Defensive"}}]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, %{sector: "Consumer Defensive", industry: nil, website: nil, description: nil}} =
+               YahooFinanceEx.get_asset_profile("KO")
     end
 
     test "funds/ETFs (no profile or blank sector) are :not_found" do
@@ -409,6 +438,67 @@ defmodule YahooFinanceExTest do
       end)
 
       assert {:ok, []} = YahooFinanceEx.search("zzzzzz")
+    end
+  end
+
+  describe "get_news/2" do
+    test "returns parsed headlines, most-recent first" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v1/finance/search"} ->
+            assert conn.params["q"] == "AAPL"
+            assert conn.params["newsCount"] == "8"
+
+            Req.Test.json(conn, %{
+              "news" => [
+                %{
+                  "title" => "Older headline",
+                  "link" => "https://news.example/old",
+                  "publisher" => "Example Wire",
+                  "providerPublishTime" => 1_700_000_000
+                },
+                %{
+                  "title" => "Newest headline",
+                  "link" => "https://news.example/new",
+                  "publisher" => "Example Times",
+                  "providerPublishTime" => 1_800_000_000
+                },
+                # No title → dropped.
+                %{"link" => "https://news.example/untitled"}
+              ]
+            })
+        end
+      end)
+
+      assert {:ok, [first, second]} = YahooFinanceEx.get_news("AAPL")
+      assert first.title == "Newest headline"
+      assert first.url == "https://news.example/new"
+      assert first.publisher == "Example Times"
+      assert %DateTime{} = first.published_at
+      assert DateTime.compare(first.published_at, second.published_at) == :gt
+    end
+
+    test "no news is {:ok, []}" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v1/finance/search"} ->
+            Req.Test.json(conn, %{"quotes" => []})
+        end
+      end)
+
+      assert {:ok, []} = YahooFinanceEx.get_news("ZZZZ")
     end
   end
 

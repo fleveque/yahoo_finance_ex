@@ -2,15 +2,16 @@ defmodule YahooFinanceEx do
   @moduledoc """
   Elixir client for Yahoo! Finance.
 
-  v0.4 surface:
+  v0.6 surface:
 
     * `get_quote/1` — single-symbol quote.
     * `get_quotes/1` — batched quote fetch (up to 50 symbols per HTTP call;
       this function transparently batches larger lists).
     * `get_fx_rate/2` — current FX rate between two ISO 4217 currency codes
       via Yahoo's `<FROM><TO>=X` quote symbol.
-    * `get_asset_profile/1` — sector + industry via the `quoteSummary`
-      endpoint's `assetProfile` module (v0.3).
+    * `get_asset_profile/1` — company profile (sector, industry, website,
+      description) via the `quoteSummary` endpoint's `assetProfile` module
+      (v0.3; website + description added in v0.6).
     * `get_financial_data/1` — leverage figures (total debt, debt/equity,
       current & quick ratio, cash, EBITDA) via the `quoteSummary`
       endpoint's `financialData` module (v0.5).
@@ -19,6 +20,8 @@ defmodule YahooFinanceEx do
       payment-schedule inference.
     * `search/2` — free-text ticker/company autocomplete via the
       `search` endpoint (v0.4).
+    * `get_news/2` — recent news headlines via the `search` endpoint's
+      `news` stream (v0.6).
 
   All paths go through `YahooFinanceEx.Session` to handle the cookie + CSRF
   crumb auth dance, and through `Req` for HTTP — so tests can stub the
@@ -181,16 +184,24 @@ defmodule YahooFinanceEx do
   ## get_asset_profile/1
 
   @doc """
-  Fetches the sector and industry for a ticker via Yahoo's
-  `quoteSummary` endpoint (`assetProfile` module).
+  Fetches the company profile for a ticker via Yahoo's `quoteSummary`
+  endpoint (`assetProfile` module).
 
-  Returns `{:ok, %{sector: sector, industry: industry}}` (industry may
-  be nil), or `{:error, :not_found}` for funds, ETFs, and any symbol
-  where Yahoo exposes no asset profile (a blank sector counts as none —
-  matching the Ruby client's behavior).
+  Returns `{:ok, %{sector:, industry:, website:, description:}}` — `industry`,
+  `website` and `description` may be nil — or `{:error, :not_found}` for funds,
+  ETFs, and any symbol where Yahoo exposes no asset profile (a blank sector
+  counts as none — matching the Ruby client's behavior). `description` is
+  Yahoo's `longBusinessSummary` (English).
   """
   @spec get_asset_profile(String.t()) ::
-          {:ok, %{sector: String.t(), industry: String.t() | nil}} | {:error, error()}
+          {:ok,
+           %{
+             sector: String.t(),
+             industry: String.t() | nil,
+             website: String.t() | nil,
+             description: String.t() | nil
+           }}
+          | {:error, error()}
   def get_asset_profile(symbol) when is_binary(symbol) do
     with_auth_retry(fn creds ->
       url = creds.base_url <> @quote_summary_path <> "/" <> URI.encode(symbol)
@@ -205,12 +216,21 @@ defmodule YahooFinanceEx do
   defp parse_asset_profile(body) when is_map(body) do
     case get_in(body, ["quoteSummary", "result", Access.at(0), "assetProfile"]) do
       %{"sector" => sector} = profile when is_binary(sector) and sector != "" ->
-        {:ok, %{sector: sector, industry: profile["industry"]}}
+        {:ok,
+         %{
+           sector: sector,
+           industry: blank_to_nil(profile["industry"]),
+           website: blank_to_nil(profile["website"]),
+           description: blank_to_nil(profile["longBusinessSummary"])
+         }}
 
       _missing_or_blank ->
         {:error, :not_found}
     end
   end
+
+  defp blank_to_nil(value) when is_binary(value) and value != "", do: value
+  defp blank_to_nil(_absent_or_blank), do: nil
 
   ## get_financial_data/1
 
@@ -388,6 +408,82 @@ defmodule YahooFinanceEx do
   end
 
   defp parse_search_quote(_no_symbol), do: []
+
+  ## get_news/2
+
+  @doc """
+  Fetches recent news headlines for a ticker via Yahoo's
+  `/v1/finance/search` endpoint (its `news` stream).
+
+  Returns `{:ok, items}` — each `%{title:, url:, publisher:, published_at:}`
+  with `published_at` a UTC `DateTime` (or nil), most-recent first — or
+  `{:ok, []}` when Yahoo returns no news.
+
+  Options:
+
+    * `:count` — max headlines to request, default 8.
+  """
+  @spec get_news(String.t(), keyword()) ::
+          {:ok,
+           [
+             %{
+               title: String.t(),
+               url: String.t() | nil,
+               publisher: String.t() | nil,
+               published_at: DateTime.t() | nil
+             }
+           ]}
+          | {:error, error()}
+  def get_news(symbol, opts \\ []) when is_binary(symbol) do
+    count = Keyword.get(opts, :count, 8)
+
+    with_auth_retry(fn creds ->
+      url = creds.base_url <> @search_path
+
+      with {:ok, body} <-
+             authed_get(
+               url,
+               [q: symbol, quotesCount: 0, newsCount: count, crumb: creds.crumb],
+               creds
+             ) do
+        {:ok, parse_news(body)}
+      end
+    end)
+  end
+
+  defp parse_news(body) when is_map(body) do
+    body
+    |> Map.get("news")
+    |> List.wrap()
+    |> Enum.flat_map(&parse_news_item/1)
+    |> Enum.sort_by(&news_sort_key/1, :desc)
+  end
+
+  defp parse_news_item(%{"title" => title} = raw) when is_binary(title) and title != "" do
+    [
+      %{
+        title: title,
+        url: blank_to_nil(raw["link"]),
+        publisher: blank_to_nil(raw["publisher"]),
+        published_at: parse_unix(raw["providerPublishTime"])
+      }
+    ]
+  end
+
+  defp parse_news_item(_no_title), do: []
+
+  # Sort by publish time descending; undated items sink to the bottom.
+  defp news_sort_key(%{published_at: %DateTime{} = dt}), do: DateTime.to_unix(dt)
+  defp news_sort_key(_undated), do: 0
+
+  defp parse_unix(secs) when is_integer(secs) do
+    case DateTime.from_unix(secs) do
+      {:ok, dt} -> dt
+      {:error, _} -> nil
+    end
+  end
+
+  defp parse_unix(_not_a_timestamp), do: nil
 
   ## Auth-retry wrapper — Yahoo invalidates sessions occasionally, so
   ## every endpoint retries once on 401 with fresh credentials.

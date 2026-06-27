@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-27
+
+### Added
+
+- `YahooFinanceEx.get_financial_data/1` — key leverage / balance-sheet
+  figures (total debt, debt-to-equity, current ratio, quick ratio, total
+  cash, EBITDA) via the `quoteSummary` endpoint's `financialData` module.
+  Returns floats (or nil per missing field), `{:error, :not_found}` when a
+  ticker exposes no `financialData`.
+
 ## [0.4.0] - 2026-06-12
 
 ### Added

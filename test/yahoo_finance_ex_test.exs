@@ -227,6 +227,73 @@ defmodule YahooFinanceExTest do
     end
   end
 
+  describe "get_financial_data/1" do
+    test "returns leverage figures from the financialData module" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/AAPL"} ->
+            Req.Test.json(conn, %{
+              "quoteSummary" => %{
+                "result" => [
+                  %{
+                    "financialData" => %{
+                      "totalDebt" => %{"raw" => 118_760_996_864, "fmt" => "118.76B"},
+                      "debtToEquity" => %{"raw" => 151.433, "fmt" => "151.43"},
+                      "currentRatio" => %{"raw" => 0.953, "fmt" => "0.95"},
+                      "quickRatio" => %{"raw" => 0.745, "fmt" => "0.75"},
+                      "totalCash" => %{"raw" => 94_051_000_320, "fmt" => "94.05B"},
+                      "ebitda" => %{"raw" => 77_305_004_032, "fmt" => "77.31B"}
+                    }
+                  }
+                ]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, data} = YahooFinanceEx.get_financial_data("AAPL")
+      assert data.total_debt == 1.18760996864e11
+      assert data.debt_to_equity == 151.433
+      assert data.current_ratio == 0.953
+      assert data.quick_ratio == 0.745
+      assert data.total_cash == 9.405100032e10
+      assert data.ebitda == 7.7305004032e10
+    end
+
+    test "missing fields come back nil; absent module is :not_found" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/PARTIAL"} ->
+            Req.Test.json(conn, %{
+              "quoteSummary" => %{
+                "result" => [%{"financialData" => %{"totalCash" => %{"raw" => 100}}}]
+              }
+            })
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/VWCE.DE"} ->
+            Req.Test.json(conn, %{"quoteSummary" => %{"result" => [%{}]}})
+        end
+      end)
+
+      assert {:ok, %{total_cash: 100.0, total_debt: nil, ebitda: nil}} =
+               YahooFinanceEx.get_financial_data("PARTIAL")
+
+      assert {:error, :not_found} = YahooFinanceEx.get_financial_data("VWCE.DE")
+    end
+  end
+
   describe "get_dividend_history/2" do
     test "returns date-sorted entries from the chart events stream" do
       stub_yahoo(fn conn ->

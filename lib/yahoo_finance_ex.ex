@@ -11,6 +11,9 @@ defmodule YahooFinanceEx do
       via Yahoo's `<FROM><TO>=X` quote symbol.
     * `get_asset_profile/1` — sector + industry via the `quoteSummary`
       endpoint's `assetProfile` module (v0.3).
+    * `get_financial_data/1` — leverage figures (total debt, debt/equity,
+      current & quick ratio, cash, EBITDA) via the `quoteSummary`
+      endpoint's `financialData` module (v0.5).
     * `get_dividend_history/2` — per-payment dividend history via the
       chart endpoint's `events=div` stream (v0.3); the raw material for
       payment-schedule inference.
@@ -208,6 +211,62 @@ defmodule YahooFinanceEx do
         {:error, :not_found}
     end
   end
+
+  ## get_financial_data/1
+
+  @doc """
+  Fetches key leverage / balance-sheet figures for a ticker via the
+  `quoteSummary` endpoint (`financialData` module).
+
+  Returns `{:ok, %{total_debt, debt_to_equity, current_ratio, quick_ratio,
+  total_cash, ebitda}}` — each value a float or nil — or `{:error, :not_found}`
+  when Yahoo exposes no `financialData` (common for funds/ETFs and many
+  non-US tickers). `debt_to_equity` is Yahoo's percentage figure
+  (e.g. `151.4` = 151.4%).
+  """
+  @spec get_financial_data(String.t()) ::
+          {:ok,
+           %{
+             total_debt: float() | nil,
+             debt_to_equity: float() | nil,
+             current_ratio: float() | nil,
+             quick_ratio: float() | nil,
+             total_cash: float() | nil,
+             ebitda: float() | nil
+           }}
+          | {:error, error()}
+  def get_financial_data(symbol) when is_binary(symbol) do
+    with_auth_retry(fn creds ->
+      url = creds.base_url <> @quote_summary_path <> "/" <> URI.encode(symbol)
+
+      with {:ok, body} <-
+             authed_get(url, [modules: "financialData", crumb: creds.crumb], creds) do
+        parse_financial_data(body)
+      end
+    end)
+  end
+
+  defp parse_financial_data(body) when is_map(body) do
+    case get_in(body, ["quoteSummary", "result", Access.at(0), "financialData"]) do
+      data when is_map(data) ->
+        {:ok,
+         %{
+           total_debt: fin_raw(data["totalDebt"]),
+           debt_to_equity: fin_raw(data["debtToEquity"]),
+           current_ratio: fin_raw(data["currentRatio"]),
+           quick_ratio: fin_raw(data["quickRatio"]),
+           total_cash: fin_raw(data["totalCash"]),
+           ebitda: fin_raw(data["ebitda"])
+         }}
+
+      _missing ->
+        {:error, :not_found}
+    end
+  end
+
+  # quoteSummary numeric fields arrive as `%{"raw" => number, "fmt" => "..."}`.
+  defp fin_raw(%{"raw" => n}) when is_number(n), do: n / 1
+  defp fin_raw(_absent), do: nil
 
   ## get_dividend_history/2
 

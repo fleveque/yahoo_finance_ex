@@ -10,7 +10,7 @@ Elixir client for the Yahoo! Finance API. Handles Yahoo's cookie + CSRF crumb au
 
 ## Status
 
-v0.4 surface:
+v0.5 surface:
 
 - `get_quote/1` — single-symbol quote.
 - `get_quotes/1` — batched quote fetch (chunks of 50, returns a per-symbol result map).
@@ -18,6 +18,7 @@ v0.4 surface:
 - `get_asset_profile/1` — sector + industry via `quoteSummary`'s `assetProfile` module (v0.3).
 - `get_dividend_history/2` — per-payment dividend history via the chart endpoint's `events=div` stream (v0.3).
 - `search/2` — free-text ticker/company autocomplete via the `search` endpoint (v0.4).
+- `get_financial_data/1` — leverage / balance-sheet figures (total debt, debt-to-equity, current & quick ratio, total cash, EBITDA) via `quoteSummary`'s `financialData` module (v0.5).
 
 Planned follow-ups (not yet implemented):
 
@@ -28,7 +29,7 @@ Planned follow-ups (not yet implemented):
 ```elixir
 def deps do
   [
-    {:yahoo_finance_ex, "~> 0.2"}
+    {:yahoo_finance_ex, "~> 0.5"}
   ]
 end
 ```
@@ -66,6 +67,11 @@ profile.sector         #=> "Technology"
 # Dividend history (date-sorted; default range "2y")
 {:ok, history} = YahooFinanceEx.get_dividend_history("KO")
 hd(history)            #=> %{date: ~D[2024-03-15], amount: 0.485}
+
+# Leverage / balance-sheet figures (funds and ETFs have none -> {:error, :not_found})
+{:ok, financials} = YahooFinanceEx.get_financial_data("AAPL")
+financials.debt_to_equity   #=> 151.4   # percentage, Yahoo's convention
+financials.total_debt       #=> 1.087e11
 ```
 
 Top-level errors (for the single-resource functions, plus aborted `get_quotes` calls) return `{:error, reason}` with one of:

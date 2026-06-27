@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-28
+
+### Added
+
+- `YahooFinanceEx.get_news/2` — recent news headlines for a ticker via the
+  `/v1/finance/search` endpoint's `news` stream. Returns
+  `%{title:, url:, publisher:, published_at:}` entries (UTC `DateTime`),
+  most-recent first; `{:ok, []}` when there's no news. Accepts `:count`
+  (default 8).
+
+### Changed
+
+- `YahooFinanceEx.get_asset_profile/1` now also returns `website` and
+  `description` (Yahoo's `longBusinessSummary`), each nil when absent —
+  alongside the existing `sector`/`industry`. Funds/ETFs still return
+  `{:error, :not_found}`.
+
 ## [0.5.0] - 2026-06-27
 
 ### Added

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-28
+
+### Added
+
+- `YahooFinanceEx.get_price_history/2` — monthly closing-price history via the
+  chart endpoint (the price series alongside the dividend stream). Returns
+  `%{date:, close:}` entries sorted ascending, skipping null months; `:range`
+  defaults to `"6y"`. Pairs with `get_dividend_history/2` to build a historical
+  yield band.
+
 ## [0.6.0] - 2026-06-28
 
 ### Added

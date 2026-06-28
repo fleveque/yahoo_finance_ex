@@ -10,7 +10,7 @@ Elixir client for the Yahoo! Finance API. Handles Yahoo's cookie + CSRF crumb au
 
 ## Status
 
-v0.6 surface:
+v0.7 surface:
 
 - `get_quote/1` — single-symbol quote.
 - `get_quotes/1` — batched quote fetch (chunks of 50, returns a per-symbol result map).
@@ -20,6 +20,7 @@ v0.6 surface:
 - `search/2` — free-text ticker/company autocomplete via the `search` endpoint (v0.4).
 - `get_financial_data/1` — leverage / balance-sheet figures (total debt, debt-to-equity, current & quick ratio, total cash, EBITDA) via `quoteSummary`'s `financialData` module (v0.5).
 - `get_news/2` — recent news headlines via the `search` endpoint's `news` stream (v0.6).
+- `get_price_history/2` — monthly closing prices via the chart endpoint (v0.7).
 
 Planned follow-ups (not yet implemented):
 
@@ -80,6 +81,10 @@ financials.total_debt       #=> 1.087e11
 # Recent news headlines (most-recent first; {:ok, []} when none)
 {:ok, news} = YahooFinanceEx.get_news("AAPL", count: 5)
 hd(news)                    #=> %{title: "...", url: "...", publisher: "...", published_at: ~U[...]}
+
+# Monthly closing-price history (date-sorted; default range "6y")
+{:ok, prices} = YahooFinanceEx.get_price_history("KO")
+hd(prices)                  #=> %{date: ~D[2020-07-01], close: 44.91}
 ```
 
 Top-level errors (for the single-resource functions, plus aborted `get_quotes` calls) return `{:error, reason}` with one of:

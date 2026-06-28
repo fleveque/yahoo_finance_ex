@@ -2,7 +2,7 @@ defmodule YahooFinanceEx do
   @moduledoc """
   Elixir client for Yahoo! Finance.
 
-  v0.6 surface:
+  v0.7 surface:
 
     * `get_quote/1` — single-symbol quote.
     * `get_quotes/1` — batched quote fetch (up to 50 symbols per HTTP call;
@@ -22,6 +22,8 @@ defmodule YahooFinanceEx do
       `search` endpoint (v0.4).
     * `get_news/2` — recent news headlines via the `search` endpoint's
       `news` stream (v0.6).
+    * `get_price_history/2` — monthly closing prices via the chart endpoint
+      (the price series beside the dividend stream) (v0.7).
 
   All paths go through `YahooFinanceEx.Session` to handle the cookie + CSRF
   crumb auth dance, and through `Req` for HTTP — so tests can stub the
@@ -345,6 +347,62 @@ defmodule YahooFinanceEx do
   end
 
   defp parse_dividend_entry(_malformed), do: []
+
+  ## get_price_history/2
+
+  @doc """
+  Fetches the monthly closing-price history for a ticker via the chart
+  endpoint (the price series alongside the dividend stream).
+
+  Returns `{:ok, entries}` — each entry `%{date: Date.t(), close: float}`,
+  sorted ascending by date, skipping months Yahoo reports as null — or
+  `{:ok, []}` when the symbol has no price data. Consumers use it (paired
+  with the dividend history) to build a historical yield band.
+
+  Options:
+
+    * `:range` — Yahoo range string, default `"6y"` (enough for a ~5-year
+      yield band plus a buffer).
+  """
+  @spec get_price_history(String.t(), keyword()) ::
+          {:ok, [%{date: Date.t(), close: float()}]} | {:error, error()}
+  def get_price_history(symbol, opts \\ []) when is_binary(symbol) do
+    range = Keyword.get(opts, :range, "6y")
+
+    with_auth_retry(fn creds ->
+      url = creds.base_url <> @chart_path <> "/" <> URI.encode(symbol)
+
+      with {:ok, body} <-
+             authed_get(url, [range: range, interval: "1mo", crumb: creds.crumb], creds) do
+        {:ok, parse_price_history(body)}
+      end
+    end)
+  end
+
+  defp parse_price_history(body) when is_map(body) do
+    result = get_in(body, ["chart", "result", Access.at(0)])
+    timestamps = result && result["timestamp"]
+    closes = result && get_in(result, ["indicators", "quote", Access.at(0), "close"])
+
+    if is_list(timestamps) and is_list(closes) do
+      timestamps
+      |> Enum.zip(closes)
+      |> Enum.flat_map(&parse_price_point/1)
+      |> Enum.sort_by(& &1.date, Date)
+    else
+      []
+    end
+  end
+
+  defp parse_price_point({unix, close}) when is_integer(unix) and is_number(close) do
+    case DateTime.from_unix(unix) do
+      {:ok, datetime} -> [%{date: DateTime.to_date(datetime), close: close * 1.0}]
+      {:error, _} -> []
+    end
+  end
+
+  # Null months (Yahoo sometimes reports a null close) and malformed points.
+  defp parse_price_point(_skip), do: []
 
   ## search/2
 

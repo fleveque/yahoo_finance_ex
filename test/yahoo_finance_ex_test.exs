@@ -378,6 +378,59 @@ defmodule YahooFinanceExTest do
     end
   end
 
+  describe "get_price_history/2" do
+    test "returns date-sorted monthly closes, skipping null months" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v8/finance/chart/KO"} ->
+            assert conn.query_params["interval"] == "1mo"
+
+            Req.Test.json(conn, %{
+              "chart" => %{
+                "result" => [
+                  %{
+                    "timestamp" => [1_709_000_000, 1_711_000_000, 1_717_000_000],
+                    "indicators" => %{
+                      # Middle month is null → dropped; result stays date-sorted.
+                      "quote" => [%{"close" => [44.5, nil, 47.0]}]
+                    }
+                  }
+                ]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, [first, second]} = YahooFinanceEx.get_price_history("KO")
+      assert first.close == 44.5
+      assert second.close == 47.0
+      assert Date.compare(first.date, second.date) == :lt
+    end
+
+    test "missing price series is {:ok, []}" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v8/finance/chart/GROW"} ->
+            Req.Test.json(conn, %{"chart" => %{"result" => [%{}]}})
+        end
+      end)
+
+      assert {:ok, []} = YahooFinanceEx.get_price_history("GROW")
+    end
+  end
+
   describe "search/2" do
     test "returns parsed matches in Yahoo's order" do
       stub_yahoo(fn conn ->

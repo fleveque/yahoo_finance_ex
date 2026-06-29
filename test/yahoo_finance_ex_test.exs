@@ -25,7 +25,7 @@ defmodule YahooFinanceExTest do
         end
       end)
 
-      assert {:ok, %Quote{symbol: "AAPL", price: 187.42, currency: "USD"}} =
+      assert {:ok, %Quote{symbol: "AAPL", price: 187.42, currency: "USD", market_cap: 3_000_000_000}} =
                YahooFinanceEx.get_quote("AAPL")
     end
 
@@ -590,7 +590,8 @@ defmodule YahooFinanceExTest do
               "fiftyTwoWeekHigh" => price * 1.2,
               "fiftyTwoWeekLow" => price * 0.8,
               "exDividendDate" => 1_707_955_200,
-              "dividendDate" => 1_708_473_600
+              "dividendDate" => 1_708_473_600,
+              "marketCap" => 3_000_000_000
             }
           end)
       }

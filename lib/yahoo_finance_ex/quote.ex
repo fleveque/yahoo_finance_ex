@@ -25,7 +25,8 @@ defmodule YahooFinanceEx.Quote do
           fifty_two_week_low: float() | nil,
           ex_dividend_date: Date.t() | nil,
           dividend_date: Date.t() | nil,
-          market_cap: number() | nil
+          market_cap: number() | nil,
+          quote_type: String.t() | nil
         }
 
   defstruct [
@@ -47,7 +48,8 @@ defmodule YahooFinanceEx.Quote do
     :fifty_two_week_low,
     :ex_dividend_date,
     :dividend_date,
-    :market_cap
+    :market_cap,
+    :quote_type
   ]
 
   @doc false
@@ -75,7 +77,10 @@ defmodule YahooFinanceEx.Quote do
       fifty_two_week_low: q["fiftyTwoWeekLow"],
       ex_dividend_date: parse_unix_date(q["exDividendDate"]),
       dividend_date: parse_unix_date(q["dividendDate"]),
-      market_cap: q["marketCap"]
+      market_cap: q["marketCap"],
+      # Instrument kind, e.g. "EQUITY", "ETF", "MUTUALFUND", "INDEX",
+      # "CURRENCY". Passed through verbatim; nil when Yahoo omits it.
+      quote_type: q["quoteType"]
     }
   end
 

@@ -2,9 +2,9 @@ defmodule YahooFinanceEx do
   @moduledoc """
   Elixir client for Yahoo! Finance.
 
-  v0.7 surface:
+  v0.9 surface:
 
-    * `get_quote/1` — single-symbol quote.
+    * `get_quote/1` — single-symbol quote (carries `quote_type` since v0.9).
     * `get_quotes/1` — batched quote fetch (up to 50 symbols per HTTP call;
       this function transparently batches larger lists).
     * `get_fx_rate/2` — current FX rate between two ISO 4217 currency codes
@@ -24,6 +24,10 @@ defmodule YahooFinanceEx do
       `news` stream (v0.6).
     * `get_price_history/2` — monthly closing prices via the chart endpoint
       (the price series beside the dividend stream) (v0.7).
+    * `get_fund_profile/1` — fund/ETF profile (expense ratio, AUM, category,
+      family, inception, top holdings, sector weights) via the `quoteSummary`
+      endpoint's `fundProfile`/`defaultKeyStatistics`/`topHoldings` modules;
+      `:not_found` for single stocks (v0.9).
 
   All paths go through `YahooFinanceEx.Session` to handle the cookie + CSRF
   crumb auth dance, and through `Req` for HTTP — so tests can stub the
@@ -289,6 +293,143 @@ defmodule YahooFinanceEx do
   # quoteSummary numeric fields arrive as `%{"raw" => number, "fmt" => "..."}`.
   defp fin_raw(%{"raw" => n}) when is_number(n), do: n / 1
   defp fin_raw(_absent), do: nil
+
+  ## get_fund_profile/1
+
+  # Yahoo's `sectorWeightings` keys → the display sector names used elsewhere
+  # (they match Yahoo's own `assetProfile.sector` strings, so a fund's sector
+  # weights line up with single stocks' sectors).
+  @fund_sector_names %{
+    "realestate" => "Real Estate",
+    "consumer_cyclical" => "Consumer Cyclical",
+    "basic_materials" => "Basic Materials",
+    "consumer_defensive" => "Consumer Defensive",
+    "technology" => "Technology",
+    "communication_services" => "Communication Services",
+    "financial_services" => "Financial Services",
+    "utilities" => "Utilities",
+    "industrials" => "Industrials",
+    "energy" => "Energy",
+    "healthcare" => "Healthcare"
+  }
+
+  @doc """
+  Fetches fund/ETF profile data for a ticker via the `quoteSummary` endpoint
+  (`fundProfile`, `defaultKeyStatistics`, and `topHoldings` modules).
+
+  Returns `{:ok, %{expense_ratio, total_assets, fund_category, fund_family,
+  inception_date, top_holdings, sector_weights}}` for a fund, or
+  `{:error, :not_found}` for a single stock (Yahoo exposes no `fundProfile`
+  module) — so this doubles as an ETF discriminator.
+
+  Units: `expense_ratio` and the `weight`/`sector_weights` values are
+  percentages (Yahoo returns fractions; they are multiplied by 100 here).
+  `total_assets` is the fund's net assets (AUM) in its quoted currency.
+  `top_holdings` is a list of `%{symbol, name, weight}` (most funds return the
+  top 10), and `sector_weights` is a `%{display_sector_name => percent}` map.
+  """
+  @spec get_fund_profile(String.t()) ::
+          {:ok,
+           %{
+             expense_ratio: float() | nil,
+             total_assets: float() | nil,
+             fund_category: String.t() | nil,
+             fund_family: String.t() | nil,
+             inception_date: Date.t() | nil,
+             top_holdings: [%{symbol: String.t() | nil, name: String.t() | nil, weight: float()}],
+             sector_weights: %{optional(String.t()) => float()}
+           }}
+          | {:error, error()}
+  def get_fund_profile(symbol) when is_binary(symbol) do
+    with_auth_retry(fn creds ->
+      url = creds.base_url <> @quote_summary_path <> "/" <> URI.encode(symbol)
+      modules = "fundProfile,defaultKeyStatistics,topHoldings"
+
+      with {:ok, body} <- authed_get(url, [modules: modules, crumb: creds.crumb], creds) do
+        parse_fund_profile(body)
+      end
+    end)
+  end
+
+  defp parse_fund_profile(body) when is_map(body) do
+    result = get_in(body, ["quoteSummary", "result", Access.at(0)]) || %{}
+
+    case result["fundProfile"] do
+      %{} = fund_profile when map_size(fund_profile) > 0 ->
+        key_stats = result["defaultKeyStatistics"] || %{}
+        top = result["topHoldings"] || %{}
+
+        {:ok,
+         %{
+           expense_ratio:
+             fund_pct(
+               get_in(fund_profile, ["feesExpensesInvestment", "annualReportExpenseRatio"])
+             ),
+           total_assets: fin_raw(key_stats["totalAssets"]),
+           fund_category: blank_to_nil(fund_profile["categoryName"]),
+           fund_family: blank_to_nil(fund_profile["family"]),
+           inception_date: parse_fund_date(key_stats["fundInceptionDate"]),
+           top_holdings: parse_holdings(top["holdings"]),
+           sector_weights: parse_sector_weights(top["sectorWeightings"])
+         }}
+
+      _no_fund_module ->
+        {:error, :not_found}
+    end
+  end
+
+  # A quoteSummary fraction (`%{"raw" => 0.0022}`) → a percent (0.22).
+  defp fund_pct(value) do
+    case fin_raw(value) do
+      n when is_number(n) -> Float.round(n * 100, 4)
+      _absent -> nil
+    end
+  end
+
+  defp parse_fund_date(%{"fmt" => fmt}) when is_binary(fmt) and fmt != "" do
+    case Date.from_iso8601(fmt) do
+      {:ok, date} -> date
+      _invalid -> nil
+    end
+  end
+
+  defp parse_fund_date(%{"raw" => unix}) when is_integer(unix) and unix > 0 do
+    case DateTime.from_unix(unix) do
+      {:ok, dt} -> DateTime.to_date(dt)
+      _invalid -> nil
+    end
+  end
+
+  defp parse_fund_date(_absent), do: nil
+
+  defp parse_holdings(holdings) when is_list(holdings) do
+    holdings
+    |> Enum.map(fn holding ->
+      %{
+        symbol: blank_to_nil(holding["symbol"]),
+        name: blank_to_nil(holding["holdingName"]),
+        weight: fund_pct(holding["holdingPercent"])
+      }
+    end)
+    |> Enum.reject(&is_nil(&1.weight))
+  end
+
+  defp parse_holdings(_absent), do: []
+
+  defp parse_sector_weights(weightings) when is_list(weightings) do
+    weightings
+    |> Enum.flat_map(fn
+      %{} = single ->
+        Enum.map(single, fn {key, value} -> {@fund_sector_names[key], fund_pct(value)} end)
+
+      _other ->
+        []
+    end)
+    |> Enum.reject(fn {name, weight} -> is_nil(name) or is_nil(weight) end)
+    |> Map.new()
+  end
+
+  defp parse_sector_weights(_absent), do: %{}
 
   ## get_dividend_history/2
 

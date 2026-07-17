@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-17
+
+### Added
+
+- `YahooFinanceEx.Quote.quote_type` — the instrument kind (`"EQUITY"`, `"ETF"`,
+  `"MUTUALFUND"`, `"INDEX"`, …) passed through from the quote response's
+  `quoteType`; `nil` when Yahoo omits it. Lets consumers distinguish funds from
+  single stocks without a separate lookup.
+- `YahooFinanceEx.get_fund_profile/1` — fund/ETF profile via `quoteSummary`'s
+  `fundProfile`, `defaultKeyStatistics`, and `topHoldings` modules: expense
+  ratio, total assets (AUM), category, family, inception date, top holdings
+  (`%{symbol, name, weight}`), and sector weights (`%{sector => percent}`).
+  Returns `{:error, :not_found}` for single stocks (no `fundProfile` module),
+  so it doubles as an ETF discriminator. Expense-ratio and weight values are
+  percentages.
+
 ## [0.8.0] - 2026-06-29
 
 ### Added

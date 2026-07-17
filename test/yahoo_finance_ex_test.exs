@@ -26,8 +26,13 @@ defmodule YahooFinanceExTest do
       end)
 
       assert {:ok,
-              %Quote{symbol: "AAPL", price: 187.42, currency: "USD", market_cap: 3_000_000_000}} =
-               YahooFinanceEx.get_quote("AAPL")
+              %Quote{
+                symbol: "AAPL",
+                price: 187.42,
+                currency: "USD",
+                market_cap: 3_000_000_000,
+                quote_type: "EQUITY"
+              }} = YahooFinanceEx.get_quote("AAPL")
     end
 
     test "returns :not_found when Yahoo returns an empty result list" do
@@ -324,6 +329,97 @@ defmodule YahooFinanceExTest do
     end
   end
 
+  describe "get_fund_profile/1" do
+    test "returns expense ratio, AUM, category, holdings and sector weights for a fund" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/VHYL.AS"} ->
+            Req.Test.json(conn, %{
+              "quoteSummary" => %{
+                "result" => [
+                  %{
+                    "fundProfile" => %{
+                      "categoryName" => "Global Equity Income",
+                      "family" => "Vanguard",
+                      "feesExpensesInvestment" => %{
+                        "annualReportExpenseRatio" => %{"raw" => 0.0029}
+                      }
+                    },
+                    "defaultKeyStatistics" => %{
+                      "totalAssets" => %{"raw" => 5_000_000_000},
+                      "fundInceptionDate" => %{"raw" => 1_367_452_800, "fmt" => "2013-05-02"}
+                    },
+                    "topHoldings" => %{
+                      "holdings" => [
+                        %{
+                          "symbol" => "AAPL",
+                          "holdingName" => "Apple Inc",
+                          "holdingPercent" => %{"raw" => 0.031}
+                        },
+                        %{
+                          "symbol" => "JPM",
+                          "holdingName" => "JPMorgan",
+                          "holdingPercent" => %{"raw" => 0.021}
+                        }
+                      ],
+                      "sectorWeightings" => [
+                        %{"technology" => %{"raw" => 0.18}},
+                        %{"financial_services" => %{"raw" => 0.155}},
+                        %{"realestate" => %{"raw" => 0.04}}
+                      ]
+                    }
+                  }
+                ]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, profile} = YahooFinanceEx.get_fund_profile("VHYL.AS")
+      assert profile.expense_ratio == 0.29
+      assert profile.total_assets == 5_000_000_000.0
+      assert profile.fund_category == "Global Equity Income"
+      assert profile.fund_family == "Vanguard"
+      assert profile.inception_date == ~D[2013-05-02]
+
+      assert profile.top_holdings == [
+               %{symbol: "AAPL", name: "Apple Inc", weight: 3.1},
+               %{symbol: "JPM", name: "JPMorgan", weight: 2.1}
+             ]
+
+      assert profile.sector_weights == %{
+               "Technology" => 18.0,
+               "Financial Services" => 15.5,
+               "Real Estate" => 4.0
+             }
+    end
+
+    test "single stocks (no fundProfile module) are :not_found" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/AAPL"} ->
+            Req.Test.json(conn, %{
+              "quoteSummary" => %{"result" => [%{"assetProfile" => %{"sector" => "Technology"}}]}
+            })
+        end
+      end)
+
+      assert {:error, :not_found} = YahooFinanceEx.get_fund_profile("AAPL")
+    end
+  end
+
   describe "get_dividend_history/2" do
     test "returns date-sorted entries from the chart events stream" do
       stub_yahoo(fn conn ->
@@ -592,7 +688,8 @@ defmodule YahooFinanceExTest do
               "fiftyTwoWeekLow" => price * 0.8,
               "exDividendDate" => 1_707_955_200,
               "dividendDate" => 1_708_473_600,
-              "marketCap" => 3_000_000_000
+              "marketCap" => 3_000_000_000,
+              "quoteType" => "EQUITY"
             }
           end)
       }

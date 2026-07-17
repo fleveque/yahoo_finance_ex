@@ -21,6 +21,7 @@ v0.7 surface:
 - `get_financial_data/1` — leverage / balance-sheet figures (total debt, debt-to-equity, current & quick ratio, total cash, EBITDA) via `quoteSummary`'s `financialData` module (v0.5).
 - `get_news/2` — recent news headlines via the `search` endpoint's `news` stream (v0.6).
 - `get_price_history/2` — monthly closing prices via the chart endpoint (v0.7).
+- `get_fund_profile/1` — fund/ETF profile (expense ratio, AUM, category, family, inception, top holdings, sector weights) via `quoteSummary`'s `fundProfile`/`defaultKeyStatistics`/`topHoldings` modules; `:not_found` for single stocks, so it also discriminates funds (v0.9). `Quote.quote_type` (`"EQUITY"`/`"ETF"`/…) added the same release.
 
 Planned follow-ups (not yet implemented):
 
@@ -85,6 +86,17 @@ hd(news)                    #=> %{title: "...", url: "...", publisher: "...", pu
 # Monthly closing-price history (date-sorted; default range "6y")
 {:ok, prices} = YahooFinanceEx.get_price_history("KO")
 hd(prices)                  #=> %{date: ~D[2020-07-01], close: 44.91}
+
+# Fund/ETF profile (expense ratio & weights are percentages; :not_found for stocks)
+{:ok, fund} = YahooFinanceEx.get_fund_profile("VHYL.AS")
+fund.expense_ratio          #=> 0.29
+fund.fund_category          #=> "Global Equity Income"
+hd(fund.top_holdings)       #=> %{symbol: "AAPL", name: "Apple Inc", weight: 3.1}
+fund.sector_weights         #=> %{"Technology" => 18.0, "Financial Services" => 15.5, ...}
+
+# quote_type distinguishes funds from single stocks
+{:ok, q} = YahooFinanceEx.get_quote("VHYL.AS")
+q.quote_type                #=> "ETF"
 ```
 
 Top-level errors (for the single-resource functions, plus aborted `get_quotes` calls) return `{:error, reason}` with one of:

@@ -60,6 +60,7 @@ defmodule YahooFinanceEx do
   @quote_summary_path "/v10/finance/quoteSummary"
   @chart_path "/v8/finance/chart"
   @search_path "/v1/finance/search"
+  @options_path "/v7/finance/options"
   @max_auth_retries 2
   @batch_size 50
 
@@ -79,6 +80,34 @@ defmodule YahooFinanceEx do
           name: String.t(),
           exchange: String.t() | nil,
           type: String.t() | nil
+        }
+
+  @typedoc "One option contract returned by `get_option_chain/2`."
+  @type option_contract :: %{
+          contract_symbol: String.t(),
+          side: :call | :put,
+          strike: float(),
+          expiry: Date.t() | nil,
+          bid: float() | nil,
+          ask: float() | nil,
+          last: float() | nil,
+          volume: integer() | nil,
+          open_interest: integer() | nil,
+          implied_volatility: float() | nil,
+          in_the_money: boolean() | nil,
+          contract_size: pos_integer() | nil,
+          currency: String.t() | nil,
+          last_trade_at: DateTime.t() | nil
+        }
+
+  @typedoc "An option chain for a single expiry, plus the symbol's context."
+  @type option_chain :: %{
+          symbol: String.t(),
+          expiry: Date.t() | nil,
+          expirations: [Date.t()],
+          spot: float() | nil,
+          currency: String.t() | nil,
+          contracts: [option_contract()]
         }
 
   ## get_quote/1
@@ -683,6 +712,138 @@ defmodule YahooFinanceEx do
   end
 
   defp parse_unix(_not_a_timestamp), do: nil
+
+  ## get_option_chain/2
+
+  @doc """
+  Fetches the option chain for one symbol and **one expiry**.
+
+  Yahoo returns contracts for a single expiry per call — the nearest, unless
+  `:expiry` names another — but the response also carries the full list of
+  expiries available and the underlying's current price. So a caller needs
+  neither a discovery call for the dates nor a separate quote for the spot;
+  one request answers all three.
+
+  Returns `{:ok, chain}` where `chain` is an `t:option_chain/0`: `contracts`
+  holds calls and puts together, each tagged `side: :call | :put`, in Yahoo's
+  order (ascending by strike within each side). An unknown symbol comes back
+  as an empty `contracts` list rather than an error — Yahoo answers 200 with
+  no `options` block — so callers distinguish "no chain" from "call failed".
+
+  `contract_size` is normalized from Yahoo's `"REGULAR"`/`"MINI"` strings to
+  the share count they mean (100 / 10). It is reported per contract rather
+  than assumed, because mini options and non-US listings are exactly the
+  cases where assuming 100 is wrong rather than merely unsupported.
+
+  Options:
+
+    * `:expiry` — a `Date`; defaults to Yahoo's nearest expiry.
+
+  ## Examples
+
+      {:ok, chain} = YahooFinanceEx.get_option_chain("KO")
+      chain.spot          #=> 62.15
+      length(chain.expirations)  #=> 14
+      Enum.count(chain.contracts, & &1.side == :put)  #=> 30
+
+  """
+  @spec get_option_chain(String.t(), keyword()) :: {:ok, option_chain()} | {:error, error()}
+  def get_option_chain(symbol, opts \\ []) when is_binary(symbol) do
+    with_auth_retry(fn creds ->
+      url = creds.base_url <> @options_path <> "/" <> URI.encode(symbol)
+
+      with {:ok, body} <- authed_get(url, [crumb: creds.crumb] ++ expiry_param(opts), creds) do
+        {:ok, parse_option_chain(symbol, body)}
+      end
+    end)
+  end
+
+  defp expiry_param(opts) do
+    case Keyword.get(opts, :expiry) do
+      %Date{} = date ->
+        {:ok, datetime} = DateTime.new(date, ~T[00:00:00])
+        [date: DateTime.to_unix(datetime)]
+
+      _nearest ->
+        []
+    end
+  end
+
+  defp parse_option_chain(symbol, body) when is_map(body) do
+    result = get_in(body, ["optionChain", "result", Access.at(0)]) || %{}
+    expiry_block = get_in(result, ["options", Access.at(0)]) || %{}
+    quote_block = Map.get(result, "quote") || %{}
+
+    %{
+      symbol: Map.get(result, "underlyingSymbol") || symbol,
+      expiry: unix_to_date(expiry_block["expirationDate"]),
+      expirations: result |> Map.get("expirationDates", []) |> parse_expirations(),
+      spot: parse_float(quote_block["regularMarketPrice"]),
+      currency: quote_block["currency"],
+      contracts: parse_contracts(expiry_block)
+    }
+  end
+
+  defp parse_expirations(dates) when is_list(dates) do
+    dates |> Enum.map(&unix_to_date/1) |> Enum.reject(&is_nil/1)
+  end
+
+  defp parse_expirations(_not_a_list), do: []
+
+  defp parse_contracts(expiry_block) do
+    Enum.flat_map([{"calls", :call}, {"puts", :put}], fn {key, side} ->
+      case Map.get(expiry_block, key) do
+        rows when is_list(rows) -> Enum.flat_map(rows, &parse_contract(&1, side))
+        _absent -> []
+      end
+    end)
+  end
+
+  # A contract without a strike cannot be priced or ranked, so it is dropped
+  # rather than carried as a row of nils.
+  defp parse_contract(%{"strike" => strike} = row, side) when is_number(strike) do
+    [
+      %{
+        contract_symbol: row["contractSymbol"],
+        side: side,
+        strike: strike * 1.0,
+        expiry: unix_to_date(row["expiration"]),
+        bid: parse_float(row["bid"]),
+        ask: parse_float(row["ask"]),
+        last: parse_float(row["lastPrice"]),
+        volume: parse_integer(row["volume"]),
+        open_interest: parse_integer(row["openInterest"]),
+        implied_volatility: parse_float(row["impliedVolatility"]),
+        in_the_money: row["inTheMoney"],
+        contract_size: contract_size(row["contractSize"]),
+        currency: row["currency"],
+        last_trade_at: parse_unix(row["lastTradeDate"])
+      }
+    ]
+  end
+
+  defp parse_contract(_no_strike, _side), do: []
+
+  # Yahoo reports contract size as a class name, not a number.
+  defp contract_size("REGULAR"), do: 100
+  defp contract_size("MINI"), do: 10
+  defp contract_size(_unknown), do: nil
+
+  defp unix_to_date(secs) when is_integer(secs) do
+    case parse_unix(secs) do
+      %DateTime{} = datetime -> DateTime.to_date(datetime)
+      nil -> nil
+    end
+  end
+
+  defp unix_to_date(_not_a_timestamp), do: nil
+
+  defp parse_float(value) when is_number(value), do: value * 1.0
+  defp parse_float(_missing), do: nil
+
+  defp parse_integer(value) when is_integer(value), do: value
+  defp parse_integer(value) when is_float(value), do: trunc(value)
+  defp parse_integer(_missing), do: nil
 
   ## Auth-retry wrapper — Yahoo invalidates sessions occasionally, so
   ## every endpoint retries once on 401 with fresh credentials.

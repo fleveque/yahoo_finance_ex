@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-02
+
+### Added
+
+- `YahooFinanceEx.get_option_chain/2` — the option chain for one symbol and
+  one expiry via `/v7/finance/options`. Calls and puts come back in a single
+  `contracts` list, each tagged `side: :call | :put`, carrying strike,
+  bid/ask, last price, volume, open interest, implied volatility, moneyness,
+  currency and contract size.
+
+  The response also includes every expiry Yahoo lists and the underlying's
+  spot price, so one request answers "which expiries exist", "what is it
+  trading at" and "what are the strikes" together — a consumer screening a
+  shortlist needs one call per symbol, not three.
+
+  `contract_size` is normalized from Yahoo's `"REGULAR"`/`"MINI"` class names
+  to the share count they mean (100 / 10), and reported per contract rather
+  than assumed — mini options and non-US listings are exactly the cases where
+  assuming 100 is wrong rather than merely unsupported. An unrecognised class
+  is `nil`, not a guess.
+
+  A symbol with no chain returns `{:ok, chain}` with an empty `contracts`
+  list rather than an error, so callers can tell "no options on this name"
+  apart from "the request failed". Contracts without a strike are dropped
+  rather than carried as rows of nils.
+
+  Pass `:expiry` (a `Date`) to select an expiry other than the nearest.
+
 ## [0.9.0] - 2026-07-17
 
 ### Added

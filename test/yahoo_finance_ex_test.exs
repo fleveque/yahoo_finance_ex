@@ -652,6 +652,175 @@ defmodule YahooFinanceExTest do
     end
   end
 
+  describe "get_option_chain/2" do
+    test "parses calls and puts, tagged by side, with the spot and expiries" do
+      stub_options(fn conn ->
+        Req.Test.json(conn, option_payload())
+      end)
+
+      assert {:ok, chain} = YahooFinanceEx.get_option_chain("KO")
+
+      assert chain.symbol == "KO"
+      assert chain.spot == 62.15
+      assert chain.currency == "USD"
+      assert chain.expiry == ~D[2026-05-15]
+      assert chain.expirations == [~D[2026-05-15], ~D[2026-06-19]]
+
+      # The spot and the expiry list arrive in the same response as the
+      # contracts, so a caller needs no second request for either.
+      assert [call, put] = chain.contracts
+      assert call.side == :call
+      assert put.side == :put
+
+      assert call.strike == 60.0
+      assert call.bid == 3.1
+      assert call.ask == 3.25
+      assert call.open_interest == 1420
+      assert call.implied_volatility == 0.2134
+      assert call.in_the_money == true
+      assert call.expiry == ~D[2026-05-15]
+      assert call.last_trade_at == ~U[2026-05-05 14:30:00Z]
+    end
+
+    test "contract size is read from Yahoo's class name, not assumed" do
+      # "REGULAR" means 100 shares and "MINI" means 10. Assuming 100 would
+      # be wrong rather than merely unsupported for a mini contract.
+      stub_options(fn conn ->
+        Req.Test.json(conn, option_payload(call_overrides: %{"contractSize" => "MINI"}))
+      end)
+
+      assert {:ok, chain} = YahooFinanceEx.get_option_chain("KO")
+      assert [%{contract_size: 10}, %{contract_size: 100}] = chain.contracts
+    end
+
+    test "an unrecognised contract size is nil rather than a guess" do
+      stub_options(fn conn ->
+        Req.Test.json(conn, option_payload(call_overrides: %{"contractSize" => "JUMBO"}))
+      end)
+
+      assert {:ok, chain} = YahooFinanceEx.get_option_chain("KO")
+      assert [%{contract_size: nil} | _] = chain.contracts
+    end
+
+    test "a contract with no strike is dropped, not carried as a row of nils" do
+      stub_options(fn conn ->
+        Req.Test.json(conn, option_payload(call_overrides: %{"strike" => nil}))
+      end)
+
+      assert {:ok, chain} = YahooFinanceEx.get_option_chain("KO")
+      assert [%{side: :put}] = chain.contracts
+    end
+
+    test "a symbol with no chain returns empty contracts, not an error" do
+      # Yahoo answers 200 with no options block. That is "no chain", which a
+      # caller must be able to tell apart from "the call failed".
+      stub_options(fn conn ->
+        Req.Test.json(conn, %{
+          "optionChain" => %{"result" => [%{"underlyingSymbol" => "ZZZZ"}]}
+        })
+      end)
+
+      assert {:ok, chain} = YahooFinanceEx.get_option_chain("ZZZZ")
+      assert chain.contracts == []
+      assert chain.expirations == []
+      assert chain.spot == nil
+    end
+
+    test "an expiry is sent as a unix date parameter" do
+      stub_options(fn conn ->
+        assert conn.params["date"] == "1781827200"
+        Req.Test.json(conn, option_payload())
+      end)
+
+      assert {:ok, _chain} = YahooFinanceEx.get_option_chain("KO", expiry: ~D[2026-06-19])
+    end
+
+    test "no expiry sends no date parameter, so Yahoo picks the nearest" do
+      stub_options(fn conn ->
+        refute Map.has_key?(conn.params, "date")
+        Req.Test.json(conn, option_payload())
+      end)
+
+      assert {:ok, _chain} = YahooFinanceEx.get_option_chain("KO")
+    end
+  end
+
+  defp stub_options(options_fun) do
+    stub_yahoo(fn conn ->
+      case {conn.host, conn.request_path} do
+        {"fc.yahoo.com", _} ->
+          cookie(conn)
+
+        {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+          Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+        {"query1.finance.yahoo.com", "/v7/finance/options/KO"} ->
+          options_fun.(Plug.Conn.fetch_query_params(conn))
+
+        {"query1.finance.yahoo.com", "/v7/finance/options/ZZZZ"} ->
+          options_fun.(Plug.Conn.fetch_query_params(conn))
+      end
+    end)
+  end
+
+  defp option_payload(opts \\ []) do
+    call =
+      Map.merge(
+        %{
+          "contractSymbol" => "KO260515C00060000",
+          "strike" => 60.0,
+          "expiration" => 1_778_803_200,
+          "bid" => 3.1,
+          "ask" => 3.25,
+          "lastPrice" => 3.2,
+          "volume" => 88,
+          "openInterest" => 1420,
+          "impliedVolatility" => 0.2134,
+          "inTheMoney" => true,
+          "contractSize" => "REGULAR",
+          "currency" => "USD",
+          "lastTradeDate" => 1_777_991_400
+        },
+        Keyword.get(opts, :call_overrides, %{})
+      )
+
+    put = %{
+      "contractSymbol" => "KO260515P00055000",
+      "strike" => 55.0,
+      "expiration" => 1_778_803_200,
+      "bid" => 0.95,
+      "ask" => 1.05,
+      "lastPrice" => 1.0,
+      "volume" => 12,
+      "openInterest" => 640,
+      "impliedVolatility" => 0.1988,
+      "inTheMoney" => false,
+      "contractSize" => "REGULAR",
+      "currency" => "USD",
+      "lastTradeDate" => 1_777_991_400
+    }
+
+    %{
+      "optionChain" => %{
+        "result" => [
+          %{
+            "underlyingSymbol" => "KO",
+            "expirationDates" => [1_778_803_200, 1_781_827_200],
+            "strikes" => [55.0, 60.0],
+            "quote" => %{"regularMarketPrice" => 62.15, "currency" => "USD"},
+            "options" => [
+              %{
+                "expirationDate" => 1_778_803_200,
+                "calls" => [call],
+                "puts" => [put]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  end
+
   defp stub_yahoo(fun) do
     Req.Test.stub(YahooFinanceEx.HTTPStub, fun)
     # The Session GenServer (started by the package's Application) lives

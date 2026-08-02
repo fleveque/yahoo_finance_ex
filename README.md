@@ -22,6 +22,7 @@ v0.7 surface:
 - `get_news/2` — recent news headlines via the `search` endpoint's `news` stream (v0.6).
 - `get_price_history/2` — monthly closing prices via the chart endpoint (v0.7).
 - `get_fund_profile/1` — fund/ETF profile (expense ratio, AUM, category, family, inception, top holdings, sector weights) via `quoteSummary`'s `fundProfile`/`defaultKeyStatistics`/`topHoldings` modules; `:not_found` for single stocks, so it also discriminates funds (v0.9). `Quote.quote_type` (`"EQUITY"`/`"ETF"`/…) added the same release.
+- `get_option_chain/2` — option chain for one symbol and one expiry via `/v7/finance/options`: calls and puts together, each tagged `side`, with strike, bid/ask, last, volume, open interest, implied volatility and contract size. The response also carries every available expiry and the underlying's spot price, so one call answers all three (v0.10).
 
 Planned follow-ups (not yet implemented):
 
@@ -93,6 +94,16 @@ fund.expense_ratio          #=> 0.29
 fund.fund_category          #=> "Global Equity Income"
 hd(fund.top_holdings)       #=> %{symbol: "AAPL", name: "Apple Inc", weight: 3.1}
 fund.sector_weights         #=> %{"Technology" => 18.0, "Financial Services" => 15.5, ...}
+
+# Option chain — one symbol, one expiry (nearest unless :expiry says otherwise)
+{:ok, chain} = YahooFinanceEx.get_option_chain("KO")
+chain.spot                  #=> 62.15
+chain.expirations           #=> [~D[2026-05-15], ~D[2026-06-19], ...]
+hd(chain.contracts)         #=> %{side: :call, strike: 60.0, bid: 3.1, ask: 3.25,
+                            #     open_interest: 1420, implied_volatility: 0.2134,
+                            #     contract_size: 100, ...}
+
+{:ok, june} = YahooFinanceEx.get_option_chain("KO", expiry: ~D[2026-06-19])
 
 # quote_type distinguishes funds from single stocks
 {:ok, q} = YahooFinanceEx.get_quote("VHYL.AS")

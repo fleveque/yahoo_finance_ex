@@ -2,7 +2,7 @@ defmodule YahooFinanceEx do
   @moduledoc """
   Elixir client for Yahoo! Finance.
 
-  v0.9 surface:
+  v0.11 surface:
 
     * `get_quote/1` — single-symbol quote (carries `quote_type` since v0.9).
     * `get_quotes/1` — batched quote fetch (up to 50 symbols per HTTP call;
@@ -28,6 +28,12 @@ defmodule YahooFinanceEx do
       family, inception, top holdings, sector weights) via the `quoteSummary`
       endpoint's `fundProfile`/`defaultKeyStatistics`/`topHoldings` modules;
       `:not_found` for single stocks (v0.9).
+    * `get_option_chain/2` — calls and puts for one symbol and expiry, plus
+      every listed expiry and the underlying's spot price, via the options
+      endpoint (v0.10).
+    * `get_earnings_date/1` — the next scheduled earnings report, and whether
+      the date is confirmed or still Yahoo's estimate, via the `quoteSummary`
+      endpoint's `calendarEvents` module (v0.11).
 
   All paths go through `YahooFinanceEx.Session` to handle the cookie + CSRF
   crumb auth dance, and through `Req` for HTTP — so tests can stub the
@@ -397,7 +403,7 @@ defmodule YahooFinanceEx do
            total_assets: fin_raw(key_stats["totalAssets"]),
            fund_category: blank_to_nil(fund_profile["categoryName"]),
            fund_family: blank_to_nil(fund_profile["family"]),
-           inception_date: parse_fund_date(key_stats["fundInceptionDate"]),
+           inception_date: parse_summary_date(key_stats["fundInceptionDate"]),
            top_holdings: parse_holdings(top["holdings"]),
            sector_weights: parse_sector_weights(top["sectorWeightings"])
          }}
@@ -415,21 +421,28 @@ defmodule YahooFinanceEx do
     end
   end
 
-  defp parse_fund_date(%{"fmt" => fmt}) when is_binary(fmt) and fmt != "" do
+  # Any `quoteSummary` date wrapper (`%{"raw" => unix, "fmt" => "YYYY-MM-DD"}`)
+  # → a `Date`. Shared by the fund inception date and the earnings date.
+  # `fmt` is tried first: it is already the calendar date Yahoo means, whereas
+  # `raw` is an *instant* (an earnings `raw` carries a wall-clock time — KO's
+  # is 12:30 UTC, O's 20:00 UTC), so reading it in UTC can cross midnight for a
+  # report timed late enough in its own market. The two agreed on every sample
+  # checked; `fmt` is preferred so they cannot disagree in the case they would.
+  defp parse_summary_date(%{"fmt" => fmt}) when is_binary(fmt) and fmt != "" do
     case Date.from_iso8601(fmt) do
       {:ok, date} -> date
       _invalid -> nil
     end
   end
 
-  defp parse_fund_date(%{"raw" => unix}) when is_integer(unix) and unix > 0 do
+  defp parse_summary_date(%{"raw" => unix}) when is_integer(unix) and unix > 0 do
     case DateTime.from_unix(unix) do
       {:ok, dt} -> DateTime.to_date(dt)
       _invalid -> nil
     end
   end
 
-  defp parse_fund_date(_absent), do: nil
+  defp parse_summary_date(_absent), do: nil
 
   defp parse_holdings(holdings) when is_list(holdings) do
     holdings
@@ -459,6 +472,80 @@ defmodule YahooFinanceEx do
   end
 
   defp parse_sector_weights(_absent), do: %{}
+
+  ## get_earnings_date/1
+
+  @doc """
+  Fetches the next scheduled earnings report for a ticker via the
+  `quoteSummary` endpoint's `calendarEvents` module.
+
+  Returns `{:ok, %{date:, date_end:, estimated?:}}` — or `{:error,
+  :not_found}` when the symbol has no scheduled report. `:not_found` is a
+  normal answer, not a failure: ETFs, funds and bond trackers have no
+  earnings at all, and Yahoo answers **404** for them.
+
+  `estimated?` comes from Yahoo's own `isEarningsDateEstimate` flag — a
+  projection from the previous cycle rather than a date the company has
+  confirmed. A good share of large caps sit in that state at any time, and
+  the distinction matters to anyone timing a position around the report, so
+  it is reported rather than flattened away.
+
+  `date_end` was nil in every response observed while this was written.
+  Yahoo has historically returned `earningsDate` as a two-element range for
+  unconfirmed reports, so the field is kept and a second date degrades into
+  a range rather than being silently dropped — but do not lean on it.
+  **`estimated?` is the signal**, not the presence of `date_end`.
+
+  Coverage is not limited to US listings: European names report here even
+  though most of them have no option chain (SAN.MC, DGE.L, BMW.DE and
+  ENEL.MI all return dates).
+  """
+  @spec get_earnings_date(String.t()) ::
+          {:ok, %{date: Date.t(), date_end: Date.t() | nil, estimated?: boolean()}}
+          | {:error, error()}
+  def get_earnings_date(symbol) when is_binary(symbol) do
+    with_auth_retry(fn creds ->
+      url = creds.base_url <> @quote_summary_path <> "/" <> URI.encode(symbol)
+
+      with {:ok, body} <-
+             authed_get(url, [modules: "calendarEvents", crumb: creds.crumb], creds) do
+        parse_earnings_date(body)
+      end
+    end)
+  end
+
+  defp parse_earnings_date(body) when is_map(body) do
+    earnings =
+      get_in(body, ["quoteSummary", "result", Access.at(0), "calendarEvents", "earnings"])
+
+    case earnings do
+      %{"earningsDate" => dates} when is_list(dates) ->
+        build_earnings(Enum.map(dates, &parse_summary_date/1), earnings)
+
+      _no_calendar_module ->
+        {:error, :not_found}
+    end
+  end
+
+  # A symbol can carry the `calendarEvents` module and still have an *empty*
+  # `earningsDate` (NESN.SW does). `isEarningsDateEstimate` is `false` in that
+  # response — a default, not a statement about a date that isn't there — so
+  # the list has to be checked before the flag is read, or a stock with no
+  # date reports as a confirmed one.
+  defp build_earnings(parsed_dates, earnings) do
+    case Enum.reject(parsed_dates, &is_nil/1) do
+      [] ->
+        {:error, :not_found}
+
+      [date | rest] ->
+        {:ok,
+         %{
+           date: date,
+           date_end: List.first(rest),
+           estimated?: earnings["isEarningsDateEstimate"] == true
+         }}
+    end
+  end
 
   ## get_dividend_history/2
 
@@ -886,6 +973,16 @@ defmodule YahooFinanceEx do
 
       {:ok, %Req.Response{status: 401}} ->
         {:error, :unauthorized}
+
+      # Yahoo answers 404 when it has no data for this symbol *or* when the
+      # requested `quoteSummary` module does not apply to it — `fundProfile`
+      # on an equity, `financialData` or `calendarEvents` on an ETF. That is
+      # an answer ("there is none"), not a fault, and callers already document
+      # `:not_found` for exactly those cases. Reporting it as `{:http_status,
+      # 404}` made those docs untrue and turned a normal absence into an
+      # error that propagates as a failed fetch.
+      {:ok, %Req.Response{status: 404}} ->
+        {:error, :not_found}
 
       {:ok, %Req.Response{status: status}} ->
         {:error, {:http_status, status}}

@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-03
+
+### Added
+
+- `YahooFinanceEx.get_earnings_date/1` — the next scheduled earnings report
+  for one symbol via the `quoteSummary` endpoint's `calendarEvents` module.
+  Returns `%{date:, date_end:, estimated?:}`.
+
+  `estimated?` carries Yahoo's own `isEarningsDateEstimate` flag: a date
+  projected from the previous cycle rather than one the company has
+  confirmed. Both states are common among large caps, and the difference
+  matters to anyone timing a position around the report, so it is reported
+  rather than flattened into a bare date.
+
+  Verified against the live endpoint across 25 symbols, which corrected two
+  things worth recording:
+
+  - **`earningsDate` was never a range.** Every symbol returned zero or one
+    entry, never the two-element range older write-ups describe. `estimated?`
+    therefore reads the flag, not the entry count. A second entry is still
+    surfaced as `date_end` so the historical shape degrades rather than
+    losing a date, but it is not the signal.
+  - **A symbol can carry the module with an empty `earningsDate`** (NESN.SW
+    does), and `isEarningsDateEstimate` is `false` in that response — a
+    default, not a fact. The list is checked before the flag is read, so a
+    symbol with no date cannot report as a confirmed one.
+
+  Coverage is not US-only: SAN.MC, DGE.L, BMW.DE, ALV.DE, ENEL.MI and
+  GALP.LS all return dates, including names that have no option chain.
+
+### Fixed
+
+- **`authed_get` now maps HTTP 404 to `{:error, :not_found}`** instead of
+  `{:error, {:http_status, 404}}`.
+
+  Yahoo answers 404 both when it has no data for a symbol and when the
+  requested `quoteSummary` module does not apply to it — `fundProfile` on an
+  equity, `financialData` or `calendarEvents` on an ETF. `get_fund_profile/1`
+  and `get_financial_data/1` have documented `{:error, :not_found}` for
+  exactly those cases since 0.5/0.9, and only handled the variant where
+  Yahoo replies 200 with the module missing from the body; the 404 variant
+  escaped as a transport-shaped error.
+
+  **Behaviour change:** a caller matching on `{:error, {:http_status, 404}}`
+  now receives `{:error, :not_found}`. That is the contract these functions
+  already promised. Callers that treat `:not_found` as "there is none" and
+  other errors as "the fetch failed" get the intended behaviour for the
+  first time — previously a normal absence could abort an enrichment pass.
+
+### Changed
+
+- The moduledoc's API list said "v0.9 surface" and omitted
+  `get_option_chain/2` (added in 0.10). Both corrected.
+
 ## [0.10.0] - 2026-08-02
 
 ### Added

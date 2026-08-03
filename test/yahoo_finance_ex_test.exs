@@ -420,6 +420,94 @@ defmodule YahooFinanceExTest do
     end
   end
 
+  describe "get_earnings_date/1" do
+    test "returns a confirmed date" do
+      stub_calendar_events("KO", %{
+        "earnings" => %{
+          "earningsDate" => [%{"raw" => 1_792_499_400, "fmt" => "2026-10-20"}],
+          "isEarningsDateEstimate" => false
+        }
+      })
+
+      assert {:ok, earnings} = YahooFinanceEx.get_earnings_date("KO")
+      assert earnings.date == ~D[2026-10-20]
+      assert earnings.date_end == nil
+      refute earnings.estimated?
+    end
+
+    test "reports Yahoo's own estimate flag rather than flattening it" do
+      stub_calendar_events("AAPL", %{
+        "earnings" => %{
+          "earningsDate" => [%{"raw" => 1_793_795_400, "fmt" => "2026-10-29"}],
+          "isEarningsDateEstimate" => true
+        }
+      })
+
+      assert {:ok, %{date: ~D[2026-10-29], estimated?: true}} =
+               YahooFinanceEx.get_earnings_date("AAPL")
+    end
+
+    # Never observed live, but Yahoo has historically returned a two-element
+    # range for unconfirmed reports — degrade into a range rather than
+    # silently dropping the second date.
+    test "a two-element range fills date_end" do
+      stub_calendar_events("MMM", %{
+        "earnings" => %{
+          "earningsDate" => [
+            %{"fmt" => "2026-10-20"},
+            %{"fmt" => "2026-10-26"}
+          ],
+          "isEarningsDateEstimate" => true
+        }
+      })
+
+      assert {:ok, %{date: ~D[2026-10-20], date_end: ~D[2026-10-26]}} =
+               YahooFinanceEx.get_earnings_date("MMM")
+    end
+
+    # NESN.SW answers exactly this: the module is present, the list is empty,
+    # and `isEarningsDateEstimate` is a meaningless `false`. Reading the flag
+    # without checking the list would report a confirmed date that isn't there.
+    test "an empty earningsDate is :not_found, not a confirmed date" do
+      stub_calendar_events("NESN.SW", %{
+        "earnings" => %{"earningsDate" => [], "isEarningsDateEstimate" => false}
+      })
+
+      assert {:error, :not_found} = YahooFinanceEx.get_earnings_date("NESN.SW")
+    end
+
+    test "a symbol with no calendarEvents module is :not_found" do
+      stub_calendar_events("VWRL.AS", nil)
+
+      assert {:error, :not_found} = YahooFinanceEx.get_earnings_date("VWRL.AS")
+    end
+
+    # ETFs, bond trackers and unknown symbols come back as HTTP 404 rather
+    # than a 200 with an empty body — the common case for a fund, so it must
+    # read as "there is none", not as a failed request.
+    test "a 404 is :not_found, not an http_status error" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/SPY"} ->
+            conn
+            |> Plug.Conn.put_resp_content_type("application/json")
+            |> Plug.Conn.send_resp(
+              404,
+              ~s({"quoteSummary":{"result":null,"error":{"code":"Not Found"}}})
+            )
+        end
+      end)
+
+      assert {:error, :not_found} = YahooFinanceEx.get_earnings_date("SPY")
+    end
+  end
+
   describe "get_dividend_history/2" do
     test "returns date-sorted entries from the chart events stream" do
       stub_yahoo(fn conn ->
@@ -833,6 +921,28 @@ defmodule YahooFinanceExTest do
     conn
     |> Plug.Conn.put_resp_header("set-cookie", "A1=fake-cookie; Path=/; Domain=.yahoo.com")
     |> Plug.Conn.send_resp(200, "")
+  end
+
+  # `calendar_events` nil = a 200 whose result carries no `calendarEvents`
+  # module at all (as opposed to the 404 case, stubbed inline where used).
+  defp stub_calendar_events(symbol, calendar_events) do
+    result = if calendar_events, do: %{"calendarEvents" => calendar_events}, else: %{}
+
+    stub_yahoo(fn conn ->
+      case {conn.host, conn.request_path} do
+        {"fc.yahoo.com", _} ->
+          cookie(conn)
+
+        {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+          Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+        {"query1.finance.yahoo.com", "/v10/finance/quoteSummary/" <> _} ->
+          assert conn.params["modules"] == "calendarEvents"
+          Req.Test.json(conn, %{"quoteSummary" => %{"result" => [result]}})
+      end
+    end)
+
+    symbol
   end
 
   defp quote_payload(symbol_prices) when is_list(symbol_prices) do

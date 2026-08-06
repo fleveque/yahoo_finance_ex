@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-06
+
+### Changed
+
+- **Breaking.** `YahooFinanceEx.get_price_history/2` now returns
+  `{:ok, %{currency: currency, points: points}}` instead of `{:ok, points}`.
+
+  The chart endpoint answers in whatever unit the **venue** quotes in, and
+  said so all along in `meta.currency` — which this library discarded. A
+  London listing comes back around `1641` for a share worth £16.41, tagged
+  `"GBp"` rather than `"GBP"`; Johannesburg (`"ZAc"`) and Tel Aviv (`"ILA"`)
+  behave the same way.
+
+  Nothing in the series reveals it. A chart of pence looks exactly like a
+  chart of pounds, and comparisons *within* the series — returns, drawdowns,
+  the shape — are unaffected, so the discrepancy only surfaces where a close
+  meets real money: a dividend yield, a holding's value, a quote. Callers had
+  no way to detect it and every reason to assume the major unit.
+
+  The currency is reported verbatim rather than converted, matching
+  `get_quote/1`, which has always passed `meta.currency` through and left
+  normalization to the caller. `nil` when Yahoo omits it — which happens —
+  and that means "unknown", not "major unit".
+
+  Migration: `{:ok, points}` becomes `{:ok, %{points: points}}`, plus the
+  currency to divide by where it is a minor unit.
+
 ## [0.11.0] - 2026-08-03
 
 ### Added

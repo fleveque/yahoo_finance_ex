@@ -580,6 +580,7 @@ defmodule YahooFinanceExTest do
               "chart" => %{
                 "result" => [
                   %{
+                    "meta" => %{"currency" => "USD"},
                     "timestamp" => [1_709_000_000, 1_711_000_000, 1_717_000_000],
                     "indicators" => %{
                       # Middle month is null → dropped; result stays date-sorted.
@@ -592,10 +593,72 @@ defmodule YahooFinanceExTest do
         end
       end)
 
-      assert {:ok, [first, second]} = YahooFinanceEx.get_price_history("KO")
+      assert {:ok, %{currency: "USD", points: [first, second]}} =
+               YahooFinanceEx.get_price_history("KO")
+
       assert first.close == 44.5
       assert second.close == 47.0
       assert Date.compare(first.date, second.date) == :lt
+    end
+
+    # The whole reason the currency is reported: a London series is quoted in
+    # pence, and nothing about the numbers says so.
+    test "reports the venue's own unit, which for London is pence" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v8/finance/chart/DGE.L"} ->
+            Req.Test.json(conn, %{
+              "chart" => %{
+                "result" => [
+                  %{
+                    "meta" => %{"currency" => "GBp"},
+                    "timestamp" => [1_709_000_000],
+                    "indicators" => %{"quote" => [%{"close" => [1641.0]}]}
+                  }
+                ]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, %{currency: "GBp", points: [point]}} =
+               YahooFinanceEx.get_price_history("DGE.L")
+
+      # Reported verbatim — converting to pounds is the caller's job.
+      assert point.close == 1641.0
+    end
+
+    test "a chart with no meta currency reports nil rather than guessing" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v8/finance/chart/NOMETA"} ->
+            Req.Test.json(conn, %{
+              "chart" => %{
+                "result" => [
+                  %{
+                    "timestamp" => [1_709_000_000],
+                    "indicators" => %{"quote" => [%{"close" => [10.0]}]}
+                  }
+                ]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, %{currency: nil, points: [_point]}} =
+               YahooFinanceEx.get_price_history("NOMETA")
     end
 
     test "missing price series is {:ok, []}" do
@@ -612,7 +675,7 @@ defmodule YahooFinanceExTest do
         end
       end)
 
-      assert {:ok, []} = YahooFinanceEx.get_price_history("GROW")
+      assert {:ok, %{currency: nil, points: []}} = YahooFinanceEx.get_price_history("GROW")
     end
   end
 

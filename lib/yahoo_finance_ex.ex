@@ -611,10 +611,27 @@ defmodule YahooFinanceEx do
   Fetches the monthly closing-price history for a ticker via the chart
   endpoint (the price series alongside the dividend stream).
 
-  Returns `{:ok, entries}` — each entry `%{date: Date.t(), close: float}`,
-  sorted ascending by date, skipping months Yahoo reports as null — or
-  `{:ok, []}` when the symbol has no price data. Consumers use it (paired
-  with the dividend history) to build a historical yield band.
+  Returns `{:ok, %{currency: currency, points: points}}` — each point
+  `%{date: Date.t(), close: float}`, sorted ascending by date, skipping months
+  Yahoo reports as null, and `points: []` when the symbol has no price data.
+  Consumers use it (paired with the dividend history) to build a historical
+  yield band.
+
+  ## `currency` is the unit the closes are in, and it is not always the major one
+
+  The chart endpoint answers in whatever unit the **venue** quotes in, which
+  for a London listing is pence: `DGE.L` comes back around `1641` for a share
+  worth £16.41, tagged `"GBp"` rather than `"GBP"`. Johannesburg (`"ZAc"`) and
+  Tel Aviv (`"ILA"`) do the same.
+
+  Nothing in the series itself reveals this — a price chart looks identical
+  either way, and only a consumer putting a close next to real money (a
+  dividend, a holding, a quote) finds out. So the meta currency is reported
+  verbatim alongside the points, and converting to the major unit is the
+  caller's to do, exactly as it already is for `get_quote/1`.
+
+  `nil` when Yahoo omits it, which it does for some symbols — treat that as
+  "unknown", not as "major unit".
 
   Options:
 
@@ -622,7 +639,8 @@ defmodule YahooFinanceEx do
       yield band plus a buffer).
   """
   @spec get_price_history(String.t(), keyword()) ::
-          {:ok, [%{date: Date.t(), close: float()}]} | {:error, error()}
+          {:ok, %{currency: String.t() | nil, points: [%{date: Date.t(), close: float()}]}}
+          | {:error, error()}
   def get_price_history(symbol, opts \\ []) when is_binary(symbol) do
     range = Keyword.get(opts, :range, "6y")
 
@@ -641,14 +659,17 @@ defmodule YahooFinanceEx do
     timestamps = result && result["timestamp"]
     closes = result && get_in(result, ["indicators", "quote", Access.at(0), "close"])
 
-    if is_list(timestamps) and is_list(closes) do
-      timestamps
-      |> Enum.zip(closes)
-      |> Enum.flat_map(&parse_price_point/1)
-      |> Enum.sort_by(& &1.date, Date)
-    else
-      []
-    end
+    points =
+      if is_list(timestamps) and is_list(closes) do
+        timestamps
+        |> Enum.zip(closes)
+        |> Enum.flat_map(&parse_price_point/1)
+        |> Enum.sort_by(& &1.date, Date)
+      else
+        []
+      end
+
+    %{currency: result && get_in(result, ["meta", "currency"]), points: points}
   end
 
   defp parse_price_point({unix, close}) when is_integer(unix) and is_number(close) do

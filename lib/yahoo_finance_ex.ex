@@ -553,10 +553,28 @@ defmodule YahooFinanceEx do
   Fetches the per-payment dividend history for a ticker via the chart
   endpoint's `events=div` stream.
 
-  Returns `{:ok, entries}` — each entry `%{date: Date.t(), amount:
-  float}`, sorted ascending by date — or `{:ok, []}` when the symbol
-  pays no dividends (or Yahoo reports none for the range). Consumers
-  infer payment schedules (frequency, months) from these entries.
+  Returns `{:ok, %{currency: currency, points: points}}` — each point
+  `%{date: Date.t(), amount: float}`, sorted ascending by date, and
+  `points: []` when the symbol pays no dividends (or Yahoo reports none for
+  the range). Consumers infer payment schedules (frequency, months) from
+  these points.
+
+  ## `currency` is the unit the amounts are in
+
+  Same story as `get_price_history/2`, and the same field: this is the same
+  chart response, so the amounts arrive in whatever unit the **venue** quotes
+  in. A London payment comes back as `80.0` pence, not `0.8` pounds, tagged
+  `"GBp"`.
+
+  It matters most for the pairing. A yield computed from these amounts *and*
+  those closes is correct in either unit, because the two cancel — which is
+  exactly how a caller converting only one side turns a right answer into one
+  that is 100× out. Report both, convert both, or convert neither.
+
+  Note this differs from `get_quote/1`'s `dividend`, which Yahoo already
+  reports in the major unit. Two endpoints, two conventions.
+
+  `nil` when Yahoo omits the meta — "unknown", not "major unit".
 
   Options:
 
@@ -564,7 +582,8 @@ defmodule YahooFinanceEx do
       quarterly pattern twice).
   """
   @spec get_dividend_history(String.t(), keyword()) ::
-          {:ok, [%{date: Date.t(), amount: float()}]} | {:error, error()}
+          {:ok, %{currency: String.t() | nil, points: [%{date: Date.t(), amount: float()}]}}
+          | {:error, error()}
   def get_dividend_history(symbol, opts \\ []) when is_binary(symbol) do
     range = Keyword.get(opts, :range, "2y")
 
@@ -583,16 +602,21 @@ defmodule YahooFinanceEx do
   end
 
   defp parse_dividend_history(body) when is_map(body) do
-    case get_in(body, ["chart", "result", Access.at(0), "events", "dividends"]) do
-      %{} = dividends ->
-        dividends
-        |> Map.values()
-        |> Enum.flat_map(&parse_dividend_entry/1)
-        |> Enum.sort_by(& &1.date, Date)
+    result = get_in(body, ["chart", "result", Access.at(0)])
 
-      _none ->
-        []
-    end
+    points =
+      case result && get_in(result, ["events", "dividends"]) do
+        %{} = dividends ->
+          dividends
+          |> Map.values()
+          |> Enum.flat_map(&parse_dividend_entry/1)
+          |> Enum.sort_by(& &1.date, Date)
+
+        _none ->
+          []
+      end
+
+    %{currency: result && get_in(result, ["meta", "currency"]), points: points}
   end
 
   defp parse_dividend_entry(%{"date" => unix, "amount" => amount})

@@ -525,6 +525,7 @@ defmodule YahooFinanceExTest do
               "chart" => %{
                 "result" => [
                   %{
+                    "meta" => %{"currency" => "USD"},
                     "events" => %{
                       "dividends" => %{
                         # Deliberately unsorted; one malformed entry dropped.
@@ -540,9 +541,48 @@ defmodule YahooFinanceExTest do
         end
       end)
 
-      assert {:ok, [first, second]} = YahooFinanceEx.get_dividend_history("KO")
+      assert {:ok, %{currency: "USD", points: [first, second]}} =
+               YahooFinanceEx.get_dividend_history("KO")
+
       assert first.amount == 0.485
       assert Date.compare(first.date, second.date) == :lt
+    end
+
+    # The pairing is the point: a London payment is reported in pence, like
+    # the closes from the same response. A caller that converts one side and
+    # not the other turns a correct yield into one 100x out.
+    test "a London payment is reported in pence, like its closes" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v8/finance/chart/DGE.L"} ->
+            Req.Test.json(conn, %{
+              "chart" => %{
+                "result" => [
+                  %{
+                    "meta" => %{"currency" => "GBp"},
+                    "events" => %{
+                      "dividends" => %{
+                        "1709000000" => %{"date" => 1_709_000_000, "amount" => 40.0}
+                      }
+                    }
+                  }
+                ]
+              }
+            })
+        end
+      end)
+
+      assert {:ok, %{currency: "GBp", points: [point]}} =
+               YahooFinanceEx.get_dividend_history("DGE.L")
+
+      # 40 pence, reported as Yahoo sent it.
+      assert point.amount == 40.0
     end
 
     test "no dividend events is {:ok, []}" do
@@ -559,7 +599,7 @@ defmodule YahooFinanceExTest do
         end
       end)
 
-      assert {:ok, []} = YahooFinanceEx.get_dividend_history("GROW")
+      assert {:ok, %{currency: nil, points: []}} = YahooFinanceEx.get_dividend_history("GROW")
     end
   end
 

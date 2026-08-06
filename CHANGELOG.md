@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-06
+
+### Changed
+
+- **Breaking.** `YahooFinanceEx.get_dividend_history/2` now returns
+  `{:ok, %{currency: currency, points: points}}` instead of `{:ok, points}` —
+  the same shape 0.12.0 gave `get_price_history/2`, for the same reason and
+  from the same response.
+
+  0.12.0 fixed half of this. Dividend events come out of the *same* chart
+  call as the closes, so they arrive in the same venue unit: a London payment
+  is `80.0` pence, not `0.8` pounds. Reporting the currency on one and not
+  the other was worse than reporting it on neither — a yield is
+  `dividend / price`, which is correct in either unit because the two cancel,
+  so a caller who dutifully converted the prices alone turned a right answer
+  into one 100x out.
+
+  Both halves now carry it. Convert both, or convert neither.
+
+  Note this differs from `get_quote/1`'s `dividend`, which Yahoo already
+  reports in the major unit — two endpoints, two conventions, which is
+  exactly why each one has to say.
+
 ## [0.12.0] - 2026-08-06
 
 ### Changed

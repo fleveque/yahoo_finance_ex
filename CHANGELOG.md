@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-14
+
+### Added
+
+- `YahooFinanceEx.Quote.trailing_annual_dividend`: Yahoo's
+  `trailingAnnualDividendRate`, as sent.
+
+### Changed
+
+- When Yahoo sends no `dividendRate`, `Quote.dividend_yield` is Yahoo's own
+  `dividendYield` (a percentage, rounded as Yahoo rounds it) instead of nil.
+  Since October 2026 Yahoo leaves `dividendRate` out for most listings outside
+  Germany, in `/v7/finance/quote` and in `quoteSummary` alike; `dividend` and
+  `payout_ratio` stay nil for them. With a `dividendRate`, nothing changes.
+
+  The trailing rate is not a substitute for the forward one: on 2026-10-14
+  Iberdrola's was 0.427 against about 0.68 from Yahoo's own yield, and
+  Santander's half.
+
 ## [0.13.0] - 2026-08-06
 
 ### Changed

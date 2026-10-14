@@ -4,6 +4,14 @@ defmodule YahooFinanceEx.Quote do
 
   Fields mirror Yahoo's `/v7/finance/quote` response with derived values
   (`dividend_yield`, `payout_ratio`) computed locally.
+
+  `dividend` is Yahoo's `dividendRate`, the forward annual rate, and is nil
+  when Yahoo doesn't send it. Since October 2026 it is missing for most
+  listings outside Germany. `dividend_yield` is then Yahoo's own
+  `dividendYield` (a percentage, as Yahoo rounds it) rather than computed,
+  and `payout_ratio` is nil. `trailing_annual_dividend` is Yahoo's
+  `trailingAnnualDividendRate`, as sent: it is not a stand-in for the
+  forward rate, and for many European listings it is far from it.
   """
 
   @type t :: %__MODULE__{
@@ -18,6 +26,7 @@ defmodule YahooFinanceEx.Quote do
           eps: float() | nil,
           dividend: float() | nil,
           dividend_yield: float() | nil,
+          trailing_annual_dividend: float() | nil,
           payout_ratio: float() | nil,
           ma50: float() | nil,
           ma200: float() | nil,
@@ -41,6 +50,7 @@ defmodule YahooFinanceEx.Quote do
     :eps,
     :dividend,
     :dividend_yield,
+    :trailing_annual_dividend,
     :payout_ratio,
     :ma50,
     :ma200,
@@ -69,7 +79,8 @@ defmodule YahooFinanceEx.Quote do
       pe_ratio: q["trailingPE"],
       eps: eps,
       dividend: dividend,
-      dividend_yield: calculate_yield(dividend, price),
+      dividend_yield: calculate_yield(dividend, price) || q["dividendYield"],
+      trailing_annual_dividend: q["trailingAnnualDividendRate"],
       payout_ratio: calculate_payout(dividend, eps),
       ma50: q["fiftyDayAverage"],
       ma200: q["twoHundredDayAverage"],

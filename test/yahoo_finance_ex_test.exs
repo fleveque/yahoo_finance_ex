@@ -35,6 +35,57 @@ defmodule YahooFinanceExTest do
               }} = YahooFinanceEx.get_quote("AAPL")
     end
 
+    test "without a forward rate, the yield is Yahoo's own and the dividend stays nil" do
+      # Apple as Yahoo answered on 2026-10-14: no dividendRate, which Yahoo
+      # stopped sending for most listings outside Germany.
+      [apple] = quote_payload([{"AAPL", 341.27}])["quoteResponse"]["result"]
+
+      apple =
+        apple
+        |> Map.delete("dividendRate")
+        |> Map.merge(%{"dividendYield" => 0.32, "trailingAnnualDividendRate" => 1.05})
+
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v7/finance/quote"} ->
+            Req.Test.json(conn, %{"quoteResponse" => %{"result" => [apple]}})
+        end
+      end)
+
+      assert {:ok,
+              %Quote{
+                dividend: nil,
+                dividend_yield: 0.32,
+                payout_ratio: nil,
+                trailing_annual_dividend: 1.05
+              }} = YahooFinanceEx.get_quote("AAPL")
+    end
+
+    test "with a forward rate, the yield is computed from it as before" do
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v7/finance/quote"} ->
+            Req.Test.json(conn, quote_payload([{"AAPL", 187.42}]))
+        end
+      end)
+
+      # dividendRate 1.0 over 187.42 is 0.53%, whatever Yahoo's own figure says.
+      assert {:ok, %Quote{dividend: 1.0, dividend_yield: 0.53, trailing_annual_dividend: nil}} =
+               YahooFinanceEx.get_quote("AAPL")
+    end
+
     test "returns :not_found when Yahoo returns an empty result list" do
       stub_yahoo(fn conn ->
         case {conn.host, conn.request_path} do

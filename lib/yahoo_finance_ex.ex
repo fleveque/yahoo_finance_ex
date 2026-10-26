@@ -34,6 +34,8 @@ defmodule YahooFinanceEx do
     * `get_earnings_date/1` — the next scheduled earnings report, and whether
       the date is confirmed or still Yahoo's estimate, via the `quoteSummary`
       endpoint's `calendarEvents` module (v0.11).
+    * `get_calendar_events/1` — the same module whole: the earnings report
+      plus the latest ex-dividend and payment dates, in one request (v0.15).
 
   All paths go through `YahooFinanceEx.Session` to handle the cookie + CSRF
   crumb auth dance, and through `Req` for HTTP — so tests can stub the
@@ -504,28 +506,90 @@ defmodule YahooFinanceEx do
           {:ok, %{date: Date.t(), date_end: Date.t() | nil, estimated?: boolean()}}
           | {:error, error()}
   def get_earnings_date(symbol) when is_binary(symbol) do
+    case get_calendar_events(symbol) do
+      {:ok, %{earnings: %{} = earnings}} -> {:ok, earnings}
+      {:ok, %{earnings: nil}} -> {:error, :not_found}
+      {:error, _} = err -> err
+    end
+  end
+
+  ## get_calendar_events/1
+
+  @doc """
+  Fetches a ticker's `calendarEvents` module from the `quoteSummary`
+  endpoint: the next earnings report and the dividend dates, in one request.
+
+  Returns `{:ok, %{earnings:, ex_dividend_date:, dividend_date:}}`, or
+  `{:error, :not_found}` when the symbol has no `calendarEvents` module at
+  all. ETFs and funds don't, and Yahoo answers **404** for them.
+
+    * `earnings` is what `get_earnings_date/1` returns
+      (`%{date:, date_end:, estimated?:}`), or nil when there is no date.
+    * `ex_dividend_date` is Yahoo's `exDividendDate`.
+    * `dividend_date` is Yahoo's `dividendDate`, the **payment** date. It is
+      not the ex-date, and one must never stand in for the other.
+
+  Each is nil when Yahoo sends nothing, which it does as an empty map
+  (`"dividendDate": {}` for IBE.MC and DGE.L).
+
+  ## These are the latest known dates, not the next ones
+
+  The ex-date is the last one Yahoo knows, and it is often in the past: on
+  2026-10-26 Apple's was 2026-08-10, its next not yet announced, while
+  Iberdrola's was already 2027-01-12. A caller that wants an upcoming date
+  compares it with today. The payment date can lag a whole cycle behind:
+  Nestlé's was 2025-04-24 against an ex-date of 2026-04-20. A payment date
+  before the ex-date belongs to an earlier dividend.
+
+  ## Why this, and not `Quote.ex_dividend_date`
+
+  Since October 2026 (seen 2026-10-26) Yahoo leaves `exDividendDate` out of
+  `/v7/finance/quote` for every listing tried, US and European, so
+  `get_quote/1` returns it as nil. `quoteSummary` still sends it. It is one
+  request per symbol, where quotes batch fifty.
+  """
+  @spec get_calendar_events(String.t()) ::
+          {:ok,
+           %{
+             earnings: %{date: Date.t(), date_end: Date.t() | nil, estimated?: boolean()} | nil,
+             ex_dividend_date: Date.t() | nil,
+             dividend_date: Date.t() | nil
+           }}
+          | {:error, error()}
+  def get_calendar_events(symbol) when is_binary(symbol) do
     with_auth_retry(fn creds ->
       url = creds.base_url <> @quote_summary_path <> "/" <> URI.encode(symbol)
 
       with {:ok, body} <-
              authed_get(url, [modules: "calendarEvents", crumb: creds.crumb], creds) do
-        parse_earnings_date(body)
+        parse_calendar_events(body)
       end
     end)
   end
 
-  defp parse_earnings_date(body) when is_map(body) do
-    earnings =
-      get_in(body, ["quoteSummary", "result", Access.at(0), "calendarEvents", "earnings"])
-
-    case earnings do
-      %{"earningsDate" => dates} when is_list(dates) ->
-        build_earnings(Enum.map(dates, &parse_summary_date/1), earnings)
+  defp parse_calendar_events(body) when is_map(body) do
+    case get_in(body, ["quoteSummary", "result", Access.at(0), "calendarEvents"]) do
+      %{} = events ->
+        {:ok,
+         %{
+           earnings: parse_earnings(events["earnings"]),
+           ex_dividend_date: parse_summary_date(events["exDividendDate"]),
+           dividend_date: parse_summary_date(events["dividendDate"])
+         }}
 
       _no_calendar_module ->
         {:error, :not_found}
     end
   end
+
+  defp parse_earnings(%{"earningsDate" => dates} = earnings) when is_list(dates) do
+    case build_earnings(Enum.map(dates, &parse_summary_date/1), earnings) do
+      {:ok, parsed} -> parsed
+      {:error, :not_found} -> nil
+    end
+  end
+
+  defp parse_earnings(_absent), do: nil
 
   # A symbol can carry the `calendarEvents` module and still have an *empty*
   # `earningsDate` (NESN.SW does). `isEarningsDateEstimate` is `false` in that

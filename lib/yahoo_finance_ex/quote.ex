@@ -12,6 +12,11 @@ defmodule YahooFinanceEx.Quote do
   and `payout_ratio` is nil. `trailing_annual_dividend` is Yahoo's
   `trailingAnnualDividendRate`, as sent: it is not a stand-in for the
   forward rate, and for many European listings it is far from it.
+
+  `ex_dividend_date` is Yahoo's `exDividendDate`. Since October 2026 Yahoo
+  leaves it out of `/v7/finance/quote` for every listing tried, so it is nil;
+  `YahooFinanceEx.get_calendar_events/1` still has it. `dividend_date` is the
+  payment date, never the ex-date.
   """
 
   @type t :: %__MODULE__{

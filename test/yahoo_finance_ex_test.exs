@@ -35,6 +35,29 @@ defmodule YahooFinanceExTest do
               }} = YahooFinanceEx.get_quote("AAPL")
     end
 
+    # McDonald's in Frankfurt, as Yahoo answered on 2026-10-26: quoted in EUR,
+    # reported in USD, so its dividend is a conversion.
+    test "the currency the company reports in is passed through" do
+      [mcd] = quote_payload([{"MDO.F", 263.4}])["quoteResponse"]["result"]
+      mcd = Map.merge(mcd, %{"currency" => "EUR", "financialCurrency" => "USD"})
+
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v7/finance/quote"} ->
+            Req.Test.json(conn, %{"quoteResponse" => %{"result" => [mcd]}})
+        end
+      end)
+
+      assert {:ok, %Quote{currency: "EUR", financial_currency: "USD"}} =
+               YahooFinanceEx.get_quote("MDO.F")
+    end
+
     test "without a forward rate, the yield is Yahoo's own and the dividend stays nil" do
       # Apple as Yahoo answered on 2026-10-14: no dividendRate, which Yahoo
       # stopped sending for most listings outside Germany.
@@ -1173,6 +1196,7 @@ defmodule YahooFinanceExTest do
               "shortName" => "#{symbol} Inc.",
               "regularMarketPrice" => price,
               "currency" => "USD",
+              "financialCurrency" => "USD",
               "regularMarketChange" => 1.0,
               "regularMarketChangePercent" => 0.5,
               "regularMarketVolume" => 1_000_000,

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-26
+
+### Added
+
+- `YahooFinanceEx.get_calendar_events/1`: the whole `calendarEvents` module
+  in one request, as `%{earnings:, ex_dividend_date:, dividend_date:}`.
+  `earnings` is what `get_earnings_date/1` returns, or nil. Since October
+  2026 (seen 2026-10-26) Yahoo leaves `exDividendDate` out of
+  `/v7/finance/quote` for every listing tried, so `Quote.ex_dividend_date` is
+  nil; this is where the date still comes from.
+
+  The ex-date is the latest one Yahoo knows, often in the past (Apple's was
+  2026-08-10 on 2026-10-26, its next not announced). It comes back as sent:
+  a caller that wants an upcoming date compares it with today.
+
+### Changed
+
+- `get_earnings_date/1` is built on `get_calendar_events/1`. Same request,
+  same answers.
+
 ## [0.14.0] - 2026-10-14
 
 ### Added

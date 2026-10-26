@@ -559,6 +559,70 @@ defmodule YahooFinanceExTest do
     end
   end
 
+  # The payloads are Yahoo's, as answered on 2026-10-26.
+  describe "get_calendar_events/1" do
+    test "returns the earnings report and both dividend dates" do
+      stub_calendar_events("KO", %{
+        "dividendDate" => %{"fmt" => "2026-12-15", "raw" => 1_797_292_800},
+        "earnings" => %{
+          "earningsDate" => [%{"fmt" => "2026-10-27", "raw" => 1_793_104_200}],
+          "isEarningsDateEstimate" => false
+        },
+        "exDividendDate" => %{"fmt" => "2026-12-01", "raw" => 1_796_083_200},
+        "maxAge" => 1
+      })
+
+      assert {:ok, events} = YahooFinanceEx.get_calendar_events("KO")
+      assert events.ex_dividend_date == ~D[2026-12-01]
+      assert events.dividend_date == ~D[2026-12-15]
+      assert events.earnings == %{date: ~D[2026-10-27], date_end: nil, estimated?: false}
+    end
+
+    test "an empty map is no date" do
+      stub_calendar_events("IBE.MC", %{
+        "dividendDate" => %{},
+        "earnings" => %{"earningsDate" => [%{"fmt" => "2026-10-21", "raw" => 1_792_596_600}]},
+        "exDividendDate" => %{"fmt" => "2027-01-12", "raw" => 1_799_712_000},
+        "maxAge" => 1
+      })
+
+      assert {:ok, %{ex_dividend_date: ~D[2027-01-12], dividend_date: nil}} =
+               YahooFinanceEx.get_calendar_events("IBE.MC")
+    end
+
+    # Apple's next ex-date wasn't announced yet: Yahoo sends the last one.
+    # Deciding whether it is upcoming is the caller's, so it comes back as sent.
+    test "a past ex-date comes back as sent" do
+      stub_calendar_events("AAPL", %{
+        "dividendDate" => %{"fmt" => "2026-08-13", "raw" => 1_786_579_200},
+        "exDividendDate" => %{"fmt" => "2026-08-10", "raw" => 1_786_320_000}
+      })
+
+      assert {:ok, %{ex_dividend_date: ~D[2026-08-10], earnings: nil}} =
+               YahooFinanceEx.get_calendar_events("AAPL")
+    end
+
+    # NESN.SW: no earnings date, and its dividend dates all the same.
+    test "no earnings date is nil earnings, not :not_found" do
+      stub_calendar_events("NESN.SW", %{
+        "dividendDate" => %{"fmt" => "2025-04-24", "raw" => 1_745_452_800},
+        "earnings" => %{"earningsDate" => [], "isEarningsDateEstimate" => false},
+        "exDividendDate" => %{"fmt" => "2026-04-20", "raw" => 1_776_643_200}
+      })
+
+      assert {:ok, %{earnings: nil, ex_dividend_date: ~D[2026-04-20]}} =
+               YahooFinanceEx.get_calendar_events("NESN.SW")
+
+      assert {:error, :not_found} = YahooFinanceEx.get_earnings_date("NESN.SW")
+    end
+
+    test "a symbol with no calendarEvents module is :not_found" do
+      stub_calendar_events("SCHD", nil)
+
+      assert {:error, :not_found} = YahooFinanceEx.get_calendar_events("SCHD")
+    end
+  end
+
   describe "get_dividend_history/2" do
     test "returns date-sorted entries from the chart events stream" do
       stub_yahoo(fn conn ->

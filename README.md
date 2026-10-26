@@ -23,6 +23,8 @@ v0.7 surface:
 - `get_price_history/2` — monthly closing prices via the chart endpoint (v0.7).
 - `get_fund_profile/1` — fund/ETF profile (expense ratio, AUM, category, family, inception, top holdings, sector weights) via `quoteSummary`'s `fundProfile`/`defaultKeyStatistics`/`topHoldings` modules; `:not_found` for single stocks, so it also discriminates funds (v0.9). `Quote.quote_type` (`"EQUITY"`/`"ETF"`/…) added the same release.
 - `get_option_chain/2` — option chain for one symbol and one expiry via `/v7/finance/options`: calls and puts together, each tagged `side`, with strike, bid/ask, last, volume, open interest, implied volatility and contract size. The response also carries every available expiry and the underlying's spot price, so one call answers all three (v0.10).
+- `get_earnings_date/1` — the next earnings report via `quoteSummary`'s `calendarEvents` module, with Yahoo's own flag for whether the date is confirmed or estimated (v0.11).
+- `get_calendar_events/1` — the same module whole: the earnings report plus the latest ex-dividend and payment dates, in one request. Since October 2026 Yahoo no longer sends the ex-dividend date in `/v7/finance/quote`, so this is where it comes from. It is the latest known date, often in the past (v0.15).
 
 Planned follow-ups (not yet implemented):
 
@@ -104,6 +106,13 @@ hd(chain.contracts)         #=> %{side: :call, strike: 60.0, bid: 3.1, ask: 3.25
                             #     contract_size: 100, ...}
 
 {:ok, june} = YahooFinanceEx.get_option_chain("KO", expiry: ~D[2026-06-19])
+
+# Earnings and dividend dates, one request (ETFs and funds -> {:error, :not_found}).
+# The ex-date is the latest Yahoo knows: compare it with today for an upcoming one.
+{:ok, events} = YahooFinanceEx.get_calendar_events("KO")
+events.ex_dividend_date     #=> ~D[2026-12-01]
+events.dividend_date        #=> ~D[2026-12-15]  (the payment date)
+events.earnings             #=> %{date: ~D[2026-10-27], date_end: nil, estimated?: false}
 
 # quote_type distinguishes funds from single stocks
 {:ok, q} = YahooFinanceEx.get_quote("VHYL.AS")

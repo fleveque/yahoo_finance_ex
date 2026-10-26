@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-26
+
+### Added
+
+- `YahooFinanceEx.Quote.financial_currency`: Yahoo's `financialCurrency`,
+  the currency the company reports in. Where it differs from `currency`, the
+  dividend shown is a conversion that moves with the exchange rate, so a
+  change in it is not a raise or a cut: on 2026-10-26 MDO.F (EUR, reports in
+  USD) and RY (USD, reports in CAD), against KO (USD, USD) and SAP.DE (EUR,
+  EUR).
+
 ## [0.15.0] - 2026-10-26
 
 ### Added

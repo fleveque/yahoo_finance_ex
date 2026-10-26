@@ -17,6 +17,13 @@ defmodule YahooFinanceEx.Quote do
   leaves it out of `/v7/finance/quote` for every listing tried, so it is nil;
   `YahooFinanceEx.get_calendar_events/1` still has it. `dividend_date` is the
   payment date, never the ex-date.
+
+  `financial_currency` is Yahoo's `financialCurrency`, the currency the
+  company reports in. Where it differs from `currency`, the listing's, the
+  dividend Yahoo shows is a conversion and moves with the exchange rate: on
+  2026-10-26 MDO.F (McDonald's in Frankfurt, EUR, reports in USD) and RY
+  (Royal Bank of Canada in New York, USD, reports in CAD). nil when Yahoo
+  omits it.
   """
 
   @type t :: %__MODULE__{
@@ -24,6 +31,7 @@ defmodule YahooFinanceEx.Quote do
           name: String.t() | nil,
           price: float() | nil,
           currency: String.t() | nil,
+          financial_currency: String.t() | nil,
           change: float() | nil,
           percent_change: float() | nil,
           volume: integer() | nil,
@@ -48,6 +56,7 @@ defmodule YahooFinanceEx.Quote do
     :name,
     :price,
     :currency,
+    :financial_currency,
     :change,
     :percent_change,
     :volume,
@@ -78,6 +87,7 @@ defmodule YahooFinanceEx.Quote do
       name: q["shortName"],
       price: price,
       currency: q["currency"],
+      financial_currency: q["financialCurrency"],
       change: q["regularMarketChange"],
       percent_change: q["regularMarketChangePercent"],
       volume: q["regularMarketVolume"],

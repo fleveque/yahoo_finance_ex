@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-29
+
+### Added
+
+- `YahooFinanceEx.Quote.long_name`: Yahoo's `longName`, the company's full
+  name. `name` stays Yahoo's `shortName`, which Yahoo cuts at 31 characters
+  and pads for some listings: on 2026-10-29, "Cincinnati Financial
+  Corporatio" (long: "Cincinnati Financial Corporation"), "HITACHI"
+  ("Hitachi, Ltd."), "REALTY INCOME CORP.           R" for RY6.MU ("Realty
+  Income Corp").
+
 ## [0.16.0] - 2026-10-26
 
 ### Added

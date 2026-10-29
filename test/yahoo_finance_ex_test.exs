@@ -58,6 +58,37 @@ defmodule YahooFinanceExTest do
                YahooFinanceEx.get_quote("MDO.F")
     end
 
+    # Cincinnati Financial as Yahoo answered on 2026-10-29: the short name is
+    # cut at 31 characters, the long one isn't.
+    test "the long name is passed through next to the short one" do
+      [cinf] = quote_payload([{"CINF", 140.0}])["quoteResponse"]["result"]
+
+      cinf =
+        Map.merge(cinf, %{
+          "shortName" => "Cincinnati Financial Corporatio",
+          "longName" => "Cincinnati Financial Corporation"
+        })
+
+      stub_yahoo(fn conn ->
+        case {conn.host, conn.request_path} do
+          {"fc.yahoo.com", _} ->
+            cookie(conn)
+
+          {"query1.finance.yahoo.com", "/v1/test/getcrumb"} ->
+            Plug.Conn.send_resp(conn, 200, "fake-crumb-abc")
+
+          {"query1.finance.yahoo.com", "/v7/finance/quote"} ->
+            Req.Test.json(conn, %{"quoteResponse" => %{"result" => [cinf]}})
+        end
+      end)
+
+      assert {:ok,
+              %Quote{
+                name: "Cincinnati Financial Corporatio",
+                long_name: "Cincinnati Financial Corporation"
+              }} = YahooFinanceEx.get_quote("CINF")
+    end
+
     test "without a forward rate, the yield is Yahoo's own and the dividend stays nil" do
       # Apple as Yahoo answered on 2026-10-14: no dividendRate, which Yahoo
       # stopped sending for most listings outside Germany.

@@ -24,11 +24,18 @@ defmodule YahooFinanceEx.Quote do
   2026-10-26 MDO.F (McDonald's in Frankfurt, EUR, reports in USD) and RY
   (Royal Bank of Canada in New York, USD, reports in CAD). nil when Yahoo
   omits it.
+
+  `name` is Yahoo's `shortName`, which Yahoo cuts at 31 characters and pads
+  for some listings. `long_name` is its `longName`, the full one: on
+  2026-10-29, CINF's `name` was "Cincinnati Financial Corporatio" and its
+  `long_name` "Cincinnati Financial Corporation"; RY6.MU's "REALTY INCOME
+  CORP.           R" and "Realty Income Corp". nil when Yahoo omits it.
   """
 
   @type t :: %__MODULE__{
           symbol: String.t(),
           name: String.t() | nil,
+          long_name: String.t() | nil,
           price: float() | nil,
           currency: String.t() | nil,
           financial_currency: String.t() | nil,
@@ -54,6 +61,7 @@ defmodule YahooFinanceEx.Quote do
   defstruct [
     :symbol,
     :name,
+    :long_name,
     :price,
     :currency,
     :financial_currency,
@@ -85,6 +93,7 @@ defmodule YahooFinanceEx.Quote do
     %__MODULE__{
       symbol: q["symbol"],
       name: q["shortName"],
+      long_name: q["longName"],
       price: price,
       currency: q["currency"],
       financial_currency: q["financialCurrency"],
